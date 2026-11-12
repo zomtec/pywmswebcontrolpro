@@ -1,6 +1,9 @@
 ---
 name: Release
-on: [ push ]
+on:
+  push:
+    tags:
+      - "*"
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -33,7 +36,6 @@ jobs:
           skip-existing: true
           print-hash: true
   github-release:
-    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     needs: test-pypi
     permissions:
@@ -60,7 +62,6 @@ jobs:
         env:
           GH_TOKEN: "${{ github.token }}"
   prod-pypi:
-    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     needs: github-release
     environment:
