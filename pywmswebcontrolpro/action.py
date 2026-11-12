@@ -1,5 +1,6 @@
 """An action of a destination with its stored settings and movement model."""
 
+import asyncio
 import math
 from dataclasses import asdict, replace
 from typing import TYPE_CHECKING, Any
@@ -9,7 +10,13 @@ from .const import (
     WMS_WebControl_pro_API_actionType,
     WMS_WebControl_pro_API_responseType,
 )
-from .store import STORE_VERSION, ActionSettings, JsonStore, TravelDirection
+from .store import (
+    STORE_VERSION,
+    ActionSettings,
+    JsonStore,
+    TravelDirection,
+    valid_percent,
+)
 from .travel import CoverModel, Measurement, rotation_to_tilt, tilt_to_rotation
 
 if TYPE_CHECKING:
@@ -83,6 +90,7 @@ class Action:
         self._params: dict[str, Any] = {}
         self._overwrites: dict[str, Any] = {}
         self._needs_load = True
+        self._load_lock = asyncio.Lock()
         self._needs_save = False
         self._extra: dict[str, Any] = {}
         self._settings = ActionSettings()
@@ -174,17 +182,22 @@ class Action:
         self._settings = ActionSettings.from_dict(data.get("settings"))
         state = data.get("state")
         if isinstance(state, dict):
+            position = valid_percent(state.get("position"))
+            tilt = valid_percent(state.get("tilt"))
+            target_tilt = valid_percent(state.get("target_tilt"))
             self.model.restore(
-                state.get("position"),
-                state.get("tilt"),
-                state.get("target_position"),
-                state.get("target_tilt"),
+                position,
+                None if tilt is None else int(tilt),
+                valid_percent(state.get("target_position")),
+                None if target_tilt is None else int(target_tilt),
             )
         self._saved_state = self.model.snapshot()
 
     async def _save_persists(self) -> None:
         state = self.model.snapshot()
-        await self._store.save(
+        # Cleared before the write, so a change made during it is stored next.
+        self._needs_save = False
+        saved = await self._store.save(
             {
                 **self._extra,
                 "version": STORE_VERSION,
@@ -193,13 +206,18 @@ class Action:
                 "state": state,
             }
         )
-        self._saved_state = state
-        self._needs_save = False
+        if saved:
+            self._saved_state = state
+        else:
+            self._needs_save = True
 
     async def _ensure_loaded(self) -> None:
-        if self._needs_load:
-            self._needs_load = False
-            await self._load_persists()
+        # The lock makes a second caller wait for the stored data instead of
+        # working with the defaults and overwriting the file.
+        async with self._load_lock:
+            if self._needs_load:
+                await self._load_persists()
+                self._needs_load = False
 
     # --- Public methods ---
 

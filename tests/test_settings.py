@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -175,9 +176,9 @@ async def test_state_is_written_only_on_change(
     saves = []
     original = action._store.save
 
-    async def counting_save(data: dict) -> None:
+    async def counting_save(data: dict) -> bool:
         saves.append(data)
-        await original(data)
+        return await original(data)
 
     monkeypatch.setattr(action._store, "save", counting_save)
 
@@ -282,3 +283,96 @@ async def test_diag_contains_settings_and_model(
     assert diag["settings"] == {"travel_time_open": 30.0, "travel_time_close": 0.0}
     assert diag["model"]["position"] == 60
     assert diag["model"]["source"] == "measured"
+
+
+async def test_first_load_and_a_change_at_the_same_time_keep_the_stored_data(
+    make_control: ControlFactory, tmp_path: Path
+) -> None:
+    """A change waits for the stored data instead of replacing it."""
+    path = action_file(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "overwrites": {"minValue": -75},
+                "settings": {"travel_time_open": 20.0, "travel_time_close": 21.0},
+                "state": {"position": 40},
+            }
+        )
+    )
+    action = await new_action(make_control, tmp_path)
+
+    await asyncio.gather(
+        action.sync(), action.set_travel_time(TravelDirection.OPEN, 33.0)
+    )
+
+    stored = json.loads(path.read_text())
+    assert stored["overwrites"] == {"minValue": -75}
+    assert stored["settings"] == {"travel_time_open": 33.0, "travel_time_close": 21.0}
+    assert stored["state"]["position"] == 40
+    assert action.settings == ActionSettings(33.0, 21.0)
+
+
+async def test_file_that_is_no_text_falls_back_to_defaults(
+    make_control: ControlFactory, tmp_path: Path
+) -> None:
+    """A file with broken encoding is ignored like broken JSON."""
+    path = action_file(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"\xff\xfe\x00")
+
+    action = await new_action(make_control, tmp_path)
+    await action.sync()
+
+    assert action.settings == ActionSettings()
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"position": "abc"},
+        {"position": 140},
+        {"position": True},
+        {"target_position": -1, "tilt": "x"},
+    ],
+)
+async def test_invalid_stored_state_is_ignored(
+    make_control: ControlFactory, tmp_path: Path, state: dict[str, object]
+) -> None:
+    """A stored position that is no percentage is not restored."""
+    path = action_file(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"state": state}))
+
+    action = await new_action(make_control, tmp_path)
+    await action.sync()
+
+    assert action.model.position is None
+    assert action.model.tilt is None
+
+
+async def test_failed_write_is_tried_again_with_the_next_sync(
+    make_control: ControlFactory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A write error is logged and the change is stored later."""
+    action = await new_action(make_control, tmp_path)
+    await action.sync()
+    replace = os.replace
+
+    def fail(source: str, target: Path) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "replace", fail)
+    await action.set_travel_time(TravelDirection.OPEN, 12.0)
+    assert not action_file(tmp_path).exists()
+    assert "Could not write" in caplog.text
+    assert not list(action_file(tmp_path).parent.glob("*.tmp"))
+
+    monkeypatch.setattr(os, "replace", replace)
+    await action.sync()
+
+    stored = json.loads(action_file(tmp_path).read_text())
+    assert stored["settings"]["travel_time_open"] == 12.0
