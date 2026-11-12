@@ -1,16 +1,16 @@
-from collections.abc import Mapping
-from typing import Optional
-from types import MappingProxyType
-from .const import (
-    WMS_WebControl_pro_API_animationType,
-    WMS_WebControl_pro_API_actionType,
-    WMS_WebControl_pro_API_actionDescription,
-    WMS_WebControl_pro_API_drivingCause,
-)
-from .action import Action
-from .room import Room
 import asyncio
 import logging
+from collections.abc import Mapping
+from types import MappingProxyType
+
+from .action import Action
+from .const import (
+    WMS_WebControl_pro_API_actionDescription,
+    WMS_WebControl_pro_API_actionType,
+    WMS_WebControl_pro_API_animationType,
+    WMS_WebControl_pro_API_drivingCause,
+)
+from .room import Room
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ class Destination:
         return self._drivingCause
 
     @property
-    def room(self) -> Optional[Room]:
+    def room(self) -> Room | None:
         for room in self._control.rooms.values():
             if self._id in room._destination_ids:
                 return room
@@ -144,7 +144,7 @@ class Destination:
     def hasAction(
         self,
         actionDescription: WMS_WebControl_pro_API_actionDescription,
-        actionType: Optional[WMS_WebControl_pro_API_actionType] = None,
+        actionType: WMS_WebControl_pro_API_actionType | None = None,
     ) -> bool:
         for action in self._actions.values():
             if action.actionDescription == actionDescription and (
@@ -156,21 +156,18 @@ class Destination:
     def action(
         self,
         actionDescription: WMS_WebControl_pro_API_actionDescription,
-        actionType: Optional[WMS_WebControl_pro_API_actionType] = None,
+        actionType: WMS_WebControl_pro_API_actionType | None = None,
     ) -> Action:
         for action in self._actions.values():
             if action.actionDescription == actionDescription and (
                 actionType is None or actionType == action.actionType
             ):
                 return action
+        description = actionDescription.name if actionDescription else "*"
+        type_name = actionType.name if actionType else "*"
         raise NotImplementedError(
-            "Failed to find action with description %s and type %s in %s (%s)"
-            % (
-                actionDescription.name if actionDescription else "*",
-                actionType.name if actionType else "*",
-                self,
-                self._id,
-            )
+            f"Failed to find action with description {description} "
+            f"and type {type_name} in {self} ({self._id})"
         )
 
     def diag(self) -> dict:

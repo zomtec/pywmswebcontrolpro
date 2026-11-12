@@ -1,10 +1,12 @@
-import aiofiles
 import json
-from aiofiles.os import makedirs
 from typing import Any
+
+import aiofiles
+from aiofiles.os import makedirs
+
 from .const import (
-    WMS_WebControl_pro_API_actionType,
     WMS_WebControl_pro_API_actionDescription,
+    WMS_WebControl_pro_API_actionType,
     WMS_WebControl_pro_API_responseType,
 )
 
@@ -79,13 +81,13 @@ class Action:
 
     async def _load_persists(self) -> None:
         if self._persist and self._persist.exists():
-            async with aiofiles.open(self._persist, mode='r') as f:
+            async with aiofiles.open(self._persist) as f:
                 self._overwrites = json.loads(await f.read()).get("overwrites", {})
 
     async def _save_persists(self) -> None:
         if self._persist:
             await makedirs(self._persist.parent, exist_ok=True)
-            async with aiofiles.open(self._persist, mode='w') as f:
+            async with aiofiles.open(self._persist, mode="w") as f:
                 await f.write(json.dumps({"overwrites": self._overwrites}))
 
     # --- Public methods ---
@@ -124,11 +126,13 @@ class Action:
 
     def prep(self, **kwargs) -> ActionList:
         actionList = ActionList(self._dest._control)
-        actionList.append({
-            "destinationId": self._dest.id,
-            "actionId": self.id,
-            "parameters": kwargs,
-        })
+        actionList.append(
+            {
+                "destinationId": self._dest.id,
+                "actionId": self.id,
+                "parameters": kwargs,
+            }
+        )
         return actionList
 
     async def __call__(

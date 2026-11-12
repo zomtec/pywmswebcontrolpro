@@ -1,31 +1,35 @@
 import asyncio
 import pprint
 import time
-from aiohttp import ClientSession
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Optional
+from typing import Any
+
+from aiohttp import ClientSession
+
+from .const import (
+    WMS_WebControl_pro_API_actionDescription,
+    WMS_WebControl_pro_API_actionType,
+    WMS_WebControl_pro_API_command_action,
+    WMS_WebControl_pro_API_command_getConfiguration,
+    WMS_WebControl_pro_API_command_getStatus,
+    WMS_WebControl_pro_API_command_ping,
+    WMS_WebControl_pro_API_command_sceneActions,
+    WMS_WebControl_pro_API_protocolVersion,
+    WMS_WebControl_pro_API_responseType,
+    WMS_WebControl_pro_API_sceneActionType,
+    WMS_WebControl_pro_API_source,
+)
 from .destination import Destination
 from .room import Room
 from .scene import Scene
-from .const import (
-    WMS_WebControl_pro_API_protocolVersion,
-    WMS_WebControl_pro_API_source,
-    WMS_WebControl_pro_API_command_ping,
-    WMS_WebControl_pro_API_command_getConfiguration,
-    WMS_WebControl_pro_API_command_getStatus,
-    WMS_WebControl_pro_API_command_action,
-    WMS_WebControl_pro_API_command_sceneActions,
-    WMS_WebControl_pro_API_responseType,
-    WMS_WebControl_pro_API_sceneActionType,
-    WMS_WebControl_pro_API_actionDescription,
-    WMS_WebControl_pro_API_actionType,
-)
 
 
 class WebControlPro:
-    def __init__(self, host: str, session: ClientSession, persist: Optional[str] = None) -> None:
+    def __init__(
+        self, host: str, session: ClientSession, persist: str | None = None
+    ) -> None:
         self._common_lock = asyncio.Lock()
         self._status_lock = asyncio.Lock()
         self._status_wait = 0.5
@@ -48,9 +52,11 @@ class WebControlPro:
             "source": WMS_WebControl_pro_API_source,
         }
         data.update(kwargs)
-        async with self._common_lock:
-            async with self._session.post(url=self._control, json=data, timeout=5) as response:
-                return await response.json()
+        async with (
+            self._common_lock,
+            self._session.post(url=self._control, json=data, timeout=5) as response,
+        ):
+            return await response.json()
 
     async def _ping(self) -> Any:
         return await self._commonCommand(WMS_WebControl_pro_API_command_ping)
@@ -67,7 +73,8 @@ class WebControlPro:
                 await asyncio.sleep(self._status_wait - elapsed_time)
             try:
                 return await self._commonCommand(
-                    WMS_WebControl_pro_API_command_getStatus, destinations=[destinationId]
+                    WMS_WebControl_pro_API_command_getStatus,
+                    destinations=[destinationId],
                 )
             finally:
                 self._status_last = time.monotonic()

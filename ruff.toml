@@ -1,0 +1,33 @@
+target-version = "py314"
+line-length = 88
+
+[lint]
+select = [
+    "ASYNC",  # blocking calls in async code
+    "B",  # bugbear
+    "C4",  # comprehensions
+    "E",  # pycodestyle errors
+    "F",  # pyflakes
+    "G",  # logging format
+    "I",  # import sorting
+    "PIE",
+    "PT",  # pytest style
+    "RET",
+    "RUF",
+    "SIM",
+    "T20",  # no print
+    "TID",  # import conventions
+    "UP",  # pyupgrade
+    "W",  # pycodestyle warnings
+]
+ignore = [
+    "E501",  # line length is enforced by the formatter
+]
+
+[lint.per-file-ignores]
+"simulator/**" = ["T20"]
+"pywmswebcontrolpro/webcontrol.py" = ["T20"]  # example main prints
+
+[lint.isort]
+known-first-party = ["pywmswebcontrolpro"]
+combine-as-imports = true

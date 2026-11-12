@@ -19,7 +19,7 @@ jobs:
     needs: build
     environment:
       name: test-pypi
-      url: https://test.pypi.org/p/pywmspro
+      url: https://test.pypi.org/p/pywmswebcontrolpro
     permissions:
       id-token: write
     steps:
@@ -65,7 +65,7 @@ jobs:
     needs: github-release
     environment:
       name: prod-pypi
-      url: https://pypi.org/p/pywmspro
+      url: https://pypi.org/p/pywmswebcontrolpro
     permissions:
       id-token: write
     steps:
