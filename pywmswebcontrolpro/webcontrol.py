@@ -28,6 +28,7 @@ from .scene import Scene
 
 DEFAULT_STALE_WARNING_AFTER = timedelta(hours=24)
 DEFAULT_RETRY_DELAY = 1.0
+DEFAULT_REQUEST_SPACING = 0.5
 
 
 class WebControlPro:
@@ -39,17 +40,19 @@ class WebControlPro:
         *,
         stale_warning_after: timedelta = DEFAULT_STALE_WARNING_AFTER,
         retry_delay: float = DEFAULT_RETRY_DELAY,
+        request_spacing: float = DEFAULT_REQUEST_SPACING,
     ) -> None:
         """Create a client; stale_warning_after sets how long a destination may
         stay silent before a warning is logged, retry_delay the pause in
-        seconds between retries after a radio busy answer.
+        seconds between retries after a radio busy answer and request_spacing
+        the minimum pause in seconds between two status requests.
         """
         self.stale_warning_after = stale_warning_after
         self.retry_delay = retry_delay
         self._common_lock = asyncio.Lock()
         self._status_lock = asyncio.Lock()
-        self._status_wait = 0.5
-        self._status_last = time.monotonic() - self._status_wait
+        self.request_spacing = request_spacing
+        self._status_last = time.monotonic() - self.request_spacing
         self._host = host
         self._control = f"http://{host}/commonCommand"
         self._session = session
@@ -85,8 +88,8 @@ class WebControlPro:
     async def _getStatus(self, destinationId: int) -> Any:
         async with self._status_lock:
             elapsed_time = time.monotonic() - self._status_last
-            if elapsed_time < self._status_wait:
-                await asyncio.sleep(self._status_wait - elapsed_time)
+            if elapsed_time < self.request_spacing:
+                await asyncio.sleep(self.request_spacing - elapsed_time)
             try:
                 return await self._commonCommand(
                     WMS_WebControl_pro_API_command_getStatus,

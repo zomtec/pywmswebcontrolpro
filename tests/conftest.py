@@ -132,9 +132,8 @@ def make_control(gateway: FakeGateway) -> Callable[..., WebControlPro]:
 
     def factory(**kwargs: Any) -> WebControlPro:
         kwargs.setdefault("retry_delay", 0)
-        control = WebControlPro("gateway", gateway, **kwargs)  # type: ignore[arg-type]  # fake session
-        control._status_wait = 0
-        return control
+        kwargs.setdefault("request_spacing", 0)
+        return WebControlPro("gateway", gateway, **kwargs)  # type: ignore[arg-type]  # fake session
 
     return factory
 
