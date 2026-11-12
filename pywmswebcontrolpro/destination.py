@@ -105,6 +105,11 @@ class Destination:
 
     # --- Public methods ---
 
+    async def sync(self) -> None:
+        """Load stored data once and store changes of all actions."""
+        for action in self._actions.values():
+            await action.sync()
+
     async def refresh(
         self, retries: int = DEFAULT_REFRESH_RETRIES, *, raise_on_error: bool = False
     ) -> RefreshOutcome:
@@ -114,8 +119,7 @@ class Destination:
         previously known values stay unchanged. The outcome is counted in
         stats instead of being logged for every failure.
         """
-        for action in self._actions.values():
-            await action.sync()
+        await self.sync()
 
         outcome = await self._request_status(retries, raise_on_error)
         self._record(outcome.result)
