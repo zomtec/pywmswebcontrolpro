@@ -1,7 +1,11 @@
 import asyncio
 import logging
+import time
 from collections.abc import Mapping
 from types import MappingProxyType
+from typing import Any
+
+import aiohttp
 
 from .action import Action
 from .const import (
@@ -10,7 +14,16 @@ from .const import (
     WMS_WebControl_pro_API_animationType,
     WMS_WebControl_pro_API_drivingCause,
 )
+from .refresh import (
+    ERROR_RADIO_BUSY,
+    RefreshOutcome,
+    RefreshResult,
+    RefreshStats,
+    StaleChange,
+)
 from .room import Room
+
+DEFAULT_REFRESH_RETRIES = 2
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,6 +43,7 @@ class Destination:
         self._heartbeatError = None
         self._blocking = None
         self._status = {}
+        self._stats = RefreshStats()
 
     def __str__(self) -> str:
         return self.name
@@ -84,33 +98,60 @@ class Destination:
     def status(self) -> Mapping:
         return MappingProxyType(self._status)
 
+    @property
+    def stats(self) -> RefreshStats:
+        """Return a snapshot of the refresh counters of this destination."""
+        return self._stats.snapshot()
+
     # --- Public methods ---
 
-    async def refresh(self) -> bool:
+    async def refresh(
+        self, retries: int = DEFAULT_REFRESH_RETRIES, *, raise_on_error: bool = False
+    ) -> RefreshOutcome:
+        """Request the status once and retry up to retries times if radio busy.
+
+        With retries=0 exactly one request is sent. On any failure the
+        previously known values stay unchanged. The outcome is counted in
+        stats instead of being logged for every failure.
+        """
         for action in self._actions.values():
             await action.sync()
 
-        for _ in range(3):
-            status = await self._control._getStatus(self._id)
-            if not status:
-                _LOGGER.warning("Failed to get status for %s (%s)", self, self._id)
-                return False
-            if "errors" in status and 0x50005 in status["errors"]:
-                await asyncio.sleep(1)
-                continue
-            self._status = status
-            if "details" not in self._status:
-                _LOGGER.warning("No details in status for %s (%s)", self, self._id)
-                return False
-            break
-        else:
-            _LOGGER.warning(
-                "Failed to get status for %s (%s) after 3 retries", self, self._id
-            )
-            return False
+        outcome = await self._request_status(retries, raise_on_error)
+        self._record(outcome.result)
+        return outcome
 
+    async def _request_status(
+        self, retries: int, raise_on_error: bool
+    ) -> RefreshOutcome:
+        status: dict = {}
+        for attempt in range(retries + 1):
+            try:
+                status = await self._control._getStatus(self._id)
+            except aiohttp.ClientError, TimeoutError:
+                if raise_on_error:
+                    raise
+                return RefreshOutcome(RefreshResult.ERROR)
+            if ERROR_RADIO_BUSY not in ((status or {}).get("errors") or ()):
+                break
+            if attempt < retries:
+                await asyncio.sleep(self._control.retry_delay)
+        else:
+            return RefreshOutcome(RefreshResult.BUSY)
+
+        if not status:
+            return RefreshOutcome(RefreshResult.EMPTY)
+
+        self._status = status
+        values = self._apply_status(status)
+        if values is None:
+            return RefreshOutcome(RefreshResult.EMPTY)
+        return RefreshOutcome(RefreshResult.OK, values)
+
+    def _apply_status(self, status: dict) -> dict[int, dict[str, Any]] | None:
+        values: dict[int, dict[str, Any]] = {}
         refreshed = False
-        for detail in self._status.get("details", []):
+        for detail in status.get("details") or ():
             if detail.get("destinationId") != self._id or "data" not in detail:
                 continue
 
@@ -126,20 +167,38 @@ class Destination:
                 self._blocking = data["blocking"]
 
             for product in data.get("productData", []):
-                actionId = product["actionId"]
-                if actionId in self._actions and "value" in product:
-                    self._actions[actionId]._update_params(product["value"])
+                action_id = product["actionId"]
+                if action_id in self._actions and "value" in product:
+                    self._actions[action_id]._update_params(product["value"])
+                    values[action_id] = dict(product["value"])
                     continue
 
-                _LOGGER.warning(
+                _LOGGER.debug(
                     "Unknown actionId %s in productData for %s (%s)",
-                    actionId,
+                    action_id,
                     self,
                     self._id,
                 )
-                self._unknownProducts[actionId] = product
+                self._unknownProducts[action_id] = product
 
-        return refreshed
+        return values if refreshed else None
+
+    def _record(self, result: RefreshResult) -> None:
+        change = self._stats.record(
+            result,
+            now=time.monotonic(),
+            stale_after=self._control.stale_warning_after.total_seconds(),
+        )
+        if change is StaleChange.STALE:
+            _LOGGER.warning(
+                "No status for %s (%s) for %s, last result: %s",
+                self,
+                self._id,
+                self._control.stale_warning_after,
+                result.value,
+            )
+        elif change is StaleChange.RECOVERED:
+            _LOGGER.warning("Status for %s (%s) is available again", self, self._id)
 
     def hasAction(
         self,
@@ -183,4 +242,5 @@ class Destination:
             "heartbeatError": self._heartbeatError,
             "blocking": self._blocking,
             "status": self._status,
+            "stats": self._stats.as_dict(),
         }

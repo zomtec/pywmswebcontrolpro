@@ -17,6 +17,19 @@ project's contributors; see the git history for details. The license text is in
 
 See the main section in `pywmswebcontrolpro/webcontrol.py`.
 
+## Status refresh
+
+`Destination.refresh(retries=2)` requests the status of a destination and returns a
+`RefreshOutcome` with the result (`ok`, `busy`, `empty` or `error`) and the values
+of the actions. Only a "radio busy" answer is retried; with `retries=0` exactly one
+request is sent. On any failure the previous values stay unchanged. The outcome is
+truthy only for `ok`.
+
+Failed refreshes are counted per destination (`Destination.stats`, also part of
+`diag()`) instead of being logged. A warning is logged once when a destination has
+failed continuously for `stale_warning_after` (default 24 hours) and once when it
+delivers data again.
+
 ## Development
 
 ```bash
