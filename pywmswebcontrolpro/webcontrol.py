@@ -2,6 +2,7 @@ import asyncio
 import pprint
 import time
 from collections.abc import Mapping
+from datetime import timedelta
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -25,11 +26,26 @@ from .destination import Destination
 from .room import Room
 from .scene import Scene
 
+DEFAULT_STALE_WARNING_AFTER = timedelta(hours=24)
+DEFAULT_RETRY_DELAY = 1.0
+
 
 class WebControlPro:
     def __init__(
-        self, host: str, session: ClientSession, persist: str | None = None
+        self,
+        host: str,
+        session: ClientSession,
+        persist: str | None = None,
+        *,
+        stale_warning_after: timedelta = DEFAULT_STALE_WARNING_AFTER,
+        retry_delay: float = DEFAULT_RETRY_DELAY,
     ) -> None:
+        """Create a client; stale_warning_after sets how long a destination may
+        stay silent before a warning is logged, retry_delay the pause in
+        seconds between retries after a radio busy answer.
+        """
+        self.stale_warning_after = stale_warning_after
+        self.retry_delay = retry_delay
         self._common_lock = asyncio.Lock()
         self._status_lock = asyncio.Lock()
         self._status_wait = 0.5
