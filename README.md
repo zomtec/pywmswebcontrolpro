@@ -19,11 +19,11 @@ See the main section in `pywmswebcontrolpro/webcontrol.py`.
 
 ## Status refresh
 
-`Destination.refresh(retries=2)` requests the status of a destination and returns a
+`Destination.refresh()` requests the status of a destination once and returns a
 `RefreshOutcome` with the result (`ok`, `busy`, `empty` or `error`) and the values
-of the actions. Only a "radio busy" answer is retried; with `retries=0` exactly one
-request is sent. On any failure the previous values stay unchanged. The outcome is
-truthy only for `ok`.
+of the actions. A "radio busy" answer is not retried by default, because every request
+adds traffic to the radio channel; `retries=2` asks up to two more times. On any
+failure the previous values stay unchanged. The outcome is truthy only for `ok`.
 
 `WebControlPro(request_spacing=...)` sets the minimum pause between two status requests
 to the hub (default 0.5 seconds).
@@ -32,6 +32,29 @@ Failed refreshes are counted per destination (`Destination.stats`, also part of
 `diag()`) instead of being logged. A warning is logged once when a destination has
 failed continuously for `stale_warning_after` (default 24 hours) and once when it
 delivers data again.
+
+## Errors
+
+All errors of the library derive from `WebControlProError`
+(`pywmswebcontrolpro.exceptions`):
+
+- `WebControlProConnectionError`: the gateway did not answer (connection error or
+  timeout of 5 seconds).
+- `WebControlProResponseError`: the gateway answered with an HTTP error or with
+  something that is not understood. A configuration that is not understood leaves the
+  known destinations unchanged.
+- `WebControlProCommandError`: the gateway rejected an action or a scene, for example
+  because the radio channel is busy. `errors` holds the codes of the gateway. A
+  rejected command is not sent again.
+
+`Destination.refresh()` raises none of them unless `raise_on_error=True` is passed, it
+reports them as result `error`. Fields and enumeration values that a newer firmware
+adds are accepted, an unknown value becomes `Unknown`.
+
+## Security
+
+The gateway offers its API only over HTTP without authentication, so the library
+cannot encrypt or authenticate the connection. Run the gateway in a trusted network.
 
 ## Settings, movement model and stored state
 
@@ -54,6 +77,28 @@ the drive action, an awning and its valance, which share a destination, move
 independently. After a restart the position is restored from the file and marked as
 `restored` until a measurement arrives. Call `Action.sync()` after commands and
 measurements to store changes; `Destination.refresh` does it as well.
+
+## Rotation limits of slat drives (firmware bug)
+
+The hub reports the rotation limits of slat drives as -127 and 127. The drives turn
+from -75 to 75, so a tilt calculated from the reported limits is wrong: closed slats
+(rotation 75) would be shown as 21 % open. Warema knows the bug, a fixed firmware has
+not been announced.
+
+The library works around it in `pywmswebcontrolpro/action.py`:
+
+- While the hub reports exactly -127 and 127 for a rotation action, `Action.rotation_range`
+  is -75 to 75. `Action.reported_rotation_range` returns the limits of the hub.
+- A rotation that is measured beyond the range in use widens it. The limits of the hub
+  themselves (-127 and 127) are never learned.
+- `Action.set_rotation_range` overwrites the limits, `Action.reset_rotation_range`
+  returns to the default. Both are stored in the file of the action.
+- `Action.rotation_to_tilt` and `Action.tilt_to_rotation` convert with the limits in
+  use. The minimum rotation is tilt 100, the maximum rotation is tilt 0, and the
+  rotation that is sent is a whole number within the limits.
+
+The workaround ends by itself when a firmware reports other limits. It can be removed
+from the library once such a firmware is available.
 
 ## Development
 

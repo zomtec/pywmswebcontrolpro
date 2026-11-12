@@ -10,7 +10,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from aiohttp import ClientSession, ClientTimeout
+from aiohttp import ClientError, ClientResponseError, ClientSession, ClientTimeout
 
 from .const import (
     WMS_WebControl_pro_API_actionDescription,
@@ -26,6 +26,11 @@ from .const import (
     WMS_WebControl_pro_API_source,
 )
 from .destination import Destination
+from .exceptions import (
+    WebControlProCommandError,
+    WebControlProConnectionError,
+    WebControlProResponseError,
+)
 from .room import Room
 from .scene import Scene
 
@@ -86,13 +91,32 @@ class WebControlPro:
             "source": WMS_WebControl_pro_API_source,
         }
         data.update(kwargs)
-        async with (
-            self._common_lock,
-            self._session.post(
-                url=self._control, json=data, timeout=ClientTimeout(total=5)
-            ) as response,
-        ):
-            return await response.json()
+        try:
+            async with (
+                self._common_lock,
+                self._session.post(
+                    url=self._control, json=data, timeout=ClientTimeout(total=5)
+                ) as response,
+            ):
+                response.raise_for_status()
+                answer = await response.json()
+        except (ClientResponseError, ValueError) as err:
+            raise WebControlProResponseError(
+                f"Unexpected answer to {command}: {err!r}"
+            ) from err
+        except (ClientError, TimeoutError) as err:
+            raise WebControlProConnectionError(
+                f"No answer to {command}: {err!r}"
+            ) from err
+        if not isinstance(answer, dict):
+            raise WebControlProResponseError(f"Unexpected answer to {command}")
+        return answer
+
+    async def _command(self, command: str, **kwargs: Any) -> Any:
+        answer = await self._commonCommand(command, **kwargs)
+        if errors := answer.get("errors"):
+            raise WebControlProCommandError(errors)
+        return answer
 
     async def _ping(self) -> Any:
         return await self._commonCommand(WMS_WebControl_pro_API_command_ping)
@@ -117,12 +141,12 @@ class WebControlPro:
 
     async def _action(
         self,
-        actions: list,
+        actions: list[dict[str, Any]],
         responseType: WMS_WebControl_pro_API_responseType = (
             WMS_WebControl_pro_API_responseType.Instant
         ),
     ) -> Any:
-        return await self._commonCommand(
+        return await self._command(
             WMS_WebControl_pro_API_command_action,
             responseType=responseType,
             actions=actions,
@@ -138,7 +162,7 @@ class WebControlPro:
             WMS_WebControl_pro_API_responseType.Instant
         ),
     ) -> Any:
-        return await self._commonCommand(
+        return await self._command(
             WMS_WebControl_pro_API_command_sceneActions,
             responseType=responseType,
             sceneId=sceneId,
@@ -150,10 +174,13 @@ class WebControlPro:
     async def ping(self) -> bool:
         """Return True if the gateway answers the ping."""
         ping = await self._ping()
-        return ping["status"] == 0
+        return bool(ping.get("status") == 0)
 
     async def refresh(self) -> ConfigChanges:
         """Read the configuration and create destinations, rooms and scenes.
+
+        A configuration that is not understood raises WebControlProResponseError
+        and leaves the known destinations, rooms and scenes unchanged.
 
         A destination that is already known stays the same object, so its
         actions keep their movement model and stored state. Only new
@@ -161,14 +188,22 @@ class WebControlPro:
         appeared and disappeared. Rooms and scenes are created again.
         """
         config = await self._getConfiguration()
-        self._config = config
         known = self._dests
-        self._dests = {
-            dest["id"]: known.get(dest["id"]) or Destination(self, **dest)
-            for dest in config["destinations"]
-        }
-        self._rooms = {room["id"]: Room(self, **room) for room in config["rooms"]}
-        self._scenes = {scene["id"]: Scene(self, **scene) for scene in config["scenes"]}
+        try:
+            dests = {
+                dest["id"]: known.get(dest["id"]) or Destination(self, **dest)
+                for dest in config["destinations"]
+            }
+            rooms = {room["id"]: Room(self, **room) for room in config["rooms"]}
+            scenes = {scene["id"]: Scene(self, **scene) for scene in config["scenes"]}
+        except (KeyError, TypeError, ValueError) as err:
+            raise WebControlProResponseError(
+                f"Unexpected configuration: {err!r}"
+            ) from err
+        self._config = config
+        self._dests = dests
+        self._rooms = rooms
+        self._scenes = scenes
         return ConfigChanges(
             added=frozenset(self._dests) - frozenset(known),
             removed=frozenset(known) - frozenset(self._dests),
@@ -181,7 +216,7 @@ class WebControlPro:
                 return dest
         raise KeyError(f"Destination with name '{name}' not found")
 
-    def diag(self) -> dict:
+    def diag(self) -> dict[str, Any]:
         """Return the client for the diagnostics."""
         return {
             "host": self._host,
@@ -199,22 +234,22 @@ class WebControlPro:
         return self._host
 
     @property
-    def config(self) -> Mapping:
+    def config(self) -> Mapping[str, Any]:
         """Return the configuration of the gateway."""
         return MappingProxyType(self._config)
 
     @property
-    def dests(self) -> Mapping:
+    def dests(self) -> Mapping[int, Destination]:
         """Return the destinations by id."""
         return MappingProxyType(self._dests)
 
     @property
-    def rooms(self) -> Mapping:
+    def rooms(self) -> Mapping[int, Room]:
         """Return the rooms by id."""
         return MappingProxyType(self._rooms)
 
     @property
-    def scenes(self) -> Mapping:
+    def scenes(self) -> Mapping[int, Scene]:
         """Return the scenes by id."""
         return MappingProxyType(self._scenes)
 

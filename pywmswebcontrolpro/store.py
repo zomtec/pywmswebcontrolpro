@@ -1,15 +1,18 @@
 """Persistent settings and last known state of one destination."""
 
 import asyncio
+import contextlib
 import json
 import logging
+import os
+import tempfile
 from dataclasses import dataclass, fields
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 import aiofiles
-from aiofiles.os import makedirs, path as aio_path, replace
+from aiofiles.os import path as aio_path
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,6 +51,13 @@ class ActionSettings:
         return cls(**{f.name: _valid_seconds(data.get(f.name)) for f in fields(cls)})
 
 
+def valid_percent(value: Any) -> float | None:
+    """Return a stored position or tilt, None if it is no number from 0 to 100."""
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value) if 0 <= value <= 100 else None
+
+
 def _valid_seconds(value: Any) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return 0.0
@@ -58,6 +68,7 @@ class JsonStore:
     """JSON file with the persistent data of one action.
 
     Reads and writes are serialized and a write replaces the file atomically.
+    A file that cannot be read or written is logged and does not raise.
     Without a path nothing is stored.
     """
 
@@ -82,23 +93,43 @@ class JsonStore:
     async def _read(path: Path) -> dict[str, Any]:
         if not await aio_path.exists(path):
             return {}
-        async with aiofiles.open(path) as file:
-            content = await file.read()
         try:
+            async with aiofiles.open(path, encoding="utf-8") as file:
+                content = await file.read()
             data = json.loads(content)
-        except json.JSONDecodeError:
-            _LOGGER.warning("Ignoring unreadable file %s", path)
+        except (OSError, ValueError) as err:
+            _LOGGER.warning("Ignoring unreadable file %s: %r", path, err)
             return {}
         return data if isinstance(data, dict) else {}
 
-    async def save(self, data: dict[str, Any]) -> None:
-        """Replace the file with the given data."""
+    async def save(self, data: dict[str, Any]) -> bool:
+        """Replace the file with the given data, return False if that failed."""
         if self._path is None:
-            return
+            return True
         content = json.dumps(data)
-        temp = self._path.with_name(self._path.name + ".tmp")
         async with self._lock:
-            await makedirs(self._path.parent, exist_ok=True)
-            async with aiofiles.open(temp, mode="w") as file:
-                await file.write(content)
-            await replace(temp, self._path)
+            try:
+                await asyncio.to_thread(self._write, self._path, content)
+            except OSError as err:
+                _LOGGER.warning("Could not write %s: %r", self._path, err)
+                return False
+        return True
+
+    @staticmethod
+    def _write(path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # A temporary file of its own and a sync to disk keep the old file
+        # intact if the write is interrupted or runs twice at the same time.
+        descriptor, temp = tempfile.mkstemp(
+            dir=path.parent, prefix=f"{path.name}.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+                file.write(content)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temp, path)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(temp)
+            raise

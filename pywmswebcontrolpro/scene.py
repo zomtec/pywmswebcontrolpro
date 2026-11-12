@@ -11,7 +11,9 @@ if TYPE_CHECKING:
 class Scene:
     """A scene that the gateway can execute."""
 
-    def __init__(self, control: WebControlPro, id: int, names: list[str]) -> None:
+    def __init__(
+        self, control: WebControlPro, id: int, names: list[str], **kwargs: Any
+    ) -> None:
         self._control = control
         self._id = id
         self._names = names
@@ -59,7 +61,7 @@ class Scene:
         """Execute the scene and return the answer of the gateway."""
         return await self._control._sceneActions(self._id, **kwargs)
 
-    def diag(self) -> dict:
+    def diag(self) -> dict[str, Any]:
         """Return the scene for the diagnostics."""
         return {
             "id": self.id,

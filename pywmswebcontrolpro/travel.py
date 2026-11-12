@@ -8,6 +8,7 @@ Scale: position and tilt use the Home Assistant scale, 0 is closed and 100
 is open. All times are seconds, "now" is a monotonic clock value.
 """
 
+import math
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -54,6 +55,27 @@ def wms_percentage_to_position(percentage: object) -> int | None:
     if percentage < 0 or percentage > 100:
         return None
     return int(100 - percentage + 0.5)
+
+
+def rotation_to_tilt(rotation: float, minimum: float, maximum: float) -> int:
+    """Convert a WMS rotation to a tilt, the minimum rotation is tilt 100.
+
+    The result is limited to 0..100, so a rotation beyond the limits maps to
+    the nearest end.
+    """
+    span = maximum - minimum
+    if span <= 0:
+        return 0
+    return int(clamp_percent(100 * (maximum - rotation) / span) + 0.5)
+
+
+def tilt_to_rotation(tilt: float, minimum: float, maximum: float) -> int:
+    """Convert a tilt to a WMS rotation, tilt 100 is the minimum rotation.
+
+    The hub reports rotations as whole numbers, so a whole number is returned.
+    """
+    rotation = maximum - clamp_percent(tilt) / 100 * (maximum - minimum)
+    return math.floor(rotation + 0.5)
 
 
 class CoverModel:
