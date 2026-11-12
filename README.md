@@ -19,11 +19,11 @@ See the main section in `pywmswebcontrolpro/webcontrol.py`.
 
 ## Status refresh
 
-`Destination.refresh(retries=2)` requests the status of a destination and returns a
+`Destination.refresh()` requests the status of a destination once and returns a
 `RefreshOutcome` with the result (`ok`, `busy`, `empty` or `error`) and the values
-of the actions. Only a "radio busy" answer is retried; with `retries=0` exactly one
-request is sent. On any failure the previous values stay unchanged. The outcome is
-truthy only for `ok`.
+of the actions. A "radio busy" answer is not retried by default, because every request
+adds traffic to the radio channel; `retries=2` asks up to two more times. On any
+failure the previous values stay unchanged. The outcome is truthy only for `ok`.
 
 `WebControlPro(request_spacing=...)` sets the minimum pause between two status requests
 to the hub (default 0.5 seconds).
@@ -32,6 +32,29 @@ Failed refreshes are counted per destination (`Destination.stats`, also part of
 `diag()`) instead of being logged. A warning is logged once when a destination has
 failed continuously for `stale_warning_after` (default 24 hours) and once when it
 delivers data again.
+
+## Errors
+
+All errors of the library derive from `WebControlProError`
+(`pywmswebcontrolpro.exceptions`):
+
+- `WebControlProConnectionError`: the gateway did not answer (connection error or
+  timeout of 5 seconds).
+- `WebControlProResponseError`: the gateway answered with an HTTP error or with
+  something that is not understood. A configuration that is not understood leaves the
+  known destinations unchanged.
+- `WebControlProCommandError`: the gateway rejected an action or a scene, for example
+  because the radio channel is busy. `errors` holds the codes of the gateway. A
+  rejected command is not sent again.
+
+`Destination.refresh()` raises none of them unless `raise_on_error=True` is passed, it
+reports them as result `error`. Fields and enumeration values that a newer firmware
+adds are accepted, an unknown value becomes `Unknown`.
+
+## Security
+
+The gateway offers its API only over HTTP without authentication, so the library
+cannot encrypt or authenticate the connection. Run the gateway in a trusted network.
 
 ## Settings, movement model and stored state
 

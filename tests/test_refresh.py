@@ -8,6 +8,7 @@ import aiohttp
 import pytest
 
 from pywmswebcontrolpro.destination import Destination
+from pywmswebcontrolpro.exceptions import WebControlProConnectionError
 from pywmswebcontrolpro.refresh import (
     RefreshResult,
     RefreshStats,
@@ -54,13 +55,26 @@ async def test_single_request_result(
     assert dest.stats.last_result is result
 
 
-async def test_default_retries_three_attempts_on_busy(
+async def test_default_does_not_retry_on_busy(
     dest: Destination, gateway: FakeGateway
 ) -> None:
-    """A call without arguments asks three times while the radio is busy."""
-    gateway.status_answers = [STATUS_BUSY, STATUS_BUSY, STATUS_BUSY]
+    """A call without arguments asks once, also while the radio is busy."""
+    gateway.status_answers = [STATUS_BUSY]
 
     outcome = await dest.refresh()
+
+    assert outcome.result is RefreshResult.BUSY
+    assert gateway.status_requests == 1
+    assert dest.stats.busy == 1
+
+
+async def test_retries_ask_again_while_busy(
+    dest: Destination, gateway: FakeGateway
+) -> None:
+    """With retries=2 a busy radio is asked three times."""
+    gateway.status_answers = [STATUS_BUSY, STATUS_BUSY, STATUS_BUSY]
+
+    outcome = await dest.refresh(retries=2)
 
     assert outcome.result is RefreshResult.BUSY
     assert gateway.status_requests == 3
@@ -73,7 +87,7 @@ async def test_retry_succeeds_after_busy(
     """A later attempt can still deliver the status."""
     gateway.status_answers = [STATUS_BUSY, status_ok(55)]
 
-    outcome = await dest.refresh()
+    outcome = await dest.refresh(retries=2)
 
     assert outcome.result is RefreshResult.OK
     assert outcome.values == {ACTION_ID: {"percentage": 55}}
@@ -112,7 +126,7 @@ async def test_raise_on_error(dest: Destination, gateway: FakeGateway) -> None:
     """Communication errors can be raised instead of counted."""
     gateway.status_answers = [TimeoutError()]
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(WebControlProConnectionError):
         await dest.refresh(retries=0, raise_on_error=True)
 
 

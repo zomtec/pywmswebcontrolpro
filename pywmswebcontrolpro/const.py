@@ -1,6 +1,7 @@
 """Constants and enumerations of the WMS WebControl pro API."""
 
 from enum import IntEnum
+from typing import Self
 
 WMS_WebControl_pro_API_protocolVersion = "1.0"
 WMS_WebControl_pro_API_source = 2
@@ -12,7 +13,15 @@ WMS_WebControl_pro_API_command_action = "action"
 WMS_WebControl_pro_API_command_sceneActions = "sceneActions"
 
 
-class WMS_WebControl_pro_API_animationType(IntEnum):
+class _TolerantIntEnum(IntEnum):
+    """Enumeration that maps a value of a newer firmware to Unknown."""
+
+    @classmethod
+    def _missing_(cls, value: object) -> Self:
+        return cls["Unknown"]
+
+
+class WMS_WebControl_pro_API_animationType(_TolerantIntEnum):
     """Kind of device that a destination controls."""
 
     VenetianBlind = 0
@@ -25,7 +34,7 @@ class WMS_WebControl_pro_API_animationType(IntEnum):
     Unknown = 999
 
 
-class WMS_WebControl_pro_API_actionType(IntEnum):
+class WMS_WebControl_pro_API_actionType(_TolerantIntEnum):
     """Kind of value or command of an action."""
 
     Percentage = 0
@@ -41,7 +50,7 @@ class WMS_WebControl_pro_API_actionType(IntEnum):
     Unknown = 999
 
 
-class WMS_WebControl_pro_API_actionDescription(IntEnum):
+class WMS_WebControl_pro_API_actionDescription(_TolerantIntEnum):
     """Function of an action, for example awning drive or light switch."""
 
     AwningDrive = 0
@@ -75,7 +84,7 @@ class WMS_WebControl_pro_API_sceneActionType(IntEnum):
     Execute = 1
 
 
-class WMS_WebControl_pro_API_drivingCause(IntEnum):
+class WMS_WebControl_pro_API_drivingCause(_TolerantIntEnum):
     """Reason why a drive moved last."""
 
     _None = 0  # No driving cause

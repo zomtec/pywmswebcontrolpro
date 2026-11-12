@@ -7,8 +7,6 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
-import aiohttp
-
 from .action import Action
 from .const import (
     WMS_WebControl_pro_API_actionDescription,
@@ -16,6 +14,7 @@ from .const import (
     WMS_WebControl_pro_API_animationType,
     WMS_WebControl_pro_API_drivingCause,
 )
+from .exceptions import WebControlProError
 from .refresh import (
     ERROR_RADIO_BUSY,
     RefreshOutcome,
@@ -28,7 +27,8 @@ from .room import Room
 if TYPE_CHECKING:
     from .webcontrol import WebControlPro
 
-DEFAULT_REFRESH_RETRIES = 2
+# A busy radio channel is not asked again, every request adds radio traffic.
+DEFAULT_REFRESH_RETRIES = 0
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,11 +43,13 @@ class Destination:
         names: list[str],
         actions: list[dict[str, Any]],
         animationType: int,
+        **kwargs: Any,
     ) -> None:
         self._control = control
-        self._id = id
+        # The id becomes part of a file path, so it must be a number.
+        self._id = int(id)
         self._names = names
-        self._persist = (control._persist / str(id)) if control._persist else None
+        self._persist = (control._persist / str(self._id)) if control._persist else None
         self._actions = {action["id"]: Action(self, **action) for action in actions}
         self._animationType = WMS_WebControl_pro_API_animationType(animationType)
         self._drivingCause = WMS_WebControl_pro_API_drivingCause.Unknown
@@ -138,7 +140,8 @@ class Destination:
 
         With retries=0 exactly one request is sent. On any failure the
         previously known values stay unchanged. The outcome is counted in
-        stats instead of being logged for every failure.
+        stats instead of being logged for every failure. With raise_on_error
+        a WebControlProError of the request is raised instead of counted.
         """
         await self.sync()
 
@@ -153,11 +156,11 @@ class Destination:
         for attempt in range(retries + 1):
             try:
                 status = await self._control._getStatus(self._id)
-            except aiohttp.ClientError, TimeoutError:
+            except WebControlProError:
                 if raise_on_error:
                     raise
                 return RefreshOutcome(RefreshResult.ERROR)
-            if ERROR_RADIO_BUSY not in ((status or {}).get("errors") or ()):
+            if ERROR_RADIO_BUSY not in (status.get("errors") or ()):
                 break
             if attempt < retries:
                 await asyncio.sleep(self._control.retry_delay)
@@ -167,10 +170,17 @@ class Destination:
         if not status:
             return RefreshOutcome(RefreshResult.EMPTY)
 
-        self._status = status
-        values = self._apply_status(status)
+        try:
+            values = self._apply_status(status)
+        except (AttributeError, KeyError, TypeError) as err:
+            _LOGGER.debug("Unexpected status for %s (%s): %r", self, self._id, err)
+            return RefreshOutcome(RefreshResult.ERROR)
         if values is None:
-            return RefreshOutcome(RefreshResult.EMPTY)
+            result = (
+                RefreshResult.ERROR if status.get("errors") else RefreshResult.EMPTY
+            )
+            return RefreshOutcome(result)
+        self._status = status
         return RefreshOutcome(RefreshResult.OK, values)
 
     def _apply_status(self, status: dict) -> dict[int, dict[str, Any]] | None:

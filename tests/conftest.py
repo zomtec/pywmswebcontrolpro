@@ -72,23 +72,37 @@ STATUS_NO_DETAILS = {"details": []}
 class FakeResponse:
     """Response of the fake gateway."""
 
-    def __init__(self, payload: dict[str, Any]) -> None:
+    def __init__(self, payload: Any) -> None:
         self._payload = payload
 
-    async def json(self) -> dict[str, Any]:
-        """Return the queued payload."""
+    def raise_for_status(self) -> None:
+        """Accept every answer, the fake gateway has no HTTP status."""
+
+    async def json(self) -> Any:
+        """Return the queued payload or fail like a body that is no JSON."""
+        if isinstance(self._payload, Exception):
+            raise self._payload
         return self._payload
+
+
+class BadBody:
+    """Answer whose body cannot be read as JSON."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
 
 
 class FakeRequest:
     """Async context manager returned by the fake session."""
 
-    def __init__(self, answer: dict[str, Any] | Exception) -> None:
+    def __init__(self, answer: Any) -> None:
         self._answer = answer
 
     async def __aenter__(self) -> FakeResponse:
         if isinstance(self._answer, Exception):
             raise self._answer
+        if isinstance(self._answer, BadBody):
+            return FakeResponse(self._answer.error)
         return FakeResponse(self._answer)
 
     async def __aexit__(
@@ -104,16 +118,19 @@ class FakeGateway:
     """Fake session that answers getStatus from a queue and records requests."""
 
     def __init__(self) -> None:
-        self.status_answers: list[dict[str, Any] | Exception] = []
+        self.status_answers: list[Any] = []
         self.requests: list[dict[str, Any]] = []
-        self.config = CONFIG
+        self.config: Any = CONFIG
+        self.command_answer: Any = {"status": 0}
 
     def post(self, url: str, json: dict[str, Any], timeout: int) -> FakeRequest:
         """Answer one request of the library."""
         self.requests.append(json)
         if json["command"] == "getConfiguration":
             return FakeRequest(self.config)
-        return FakeRequest(self.status_answers.pop(0))
+        if json["command"] == "getStatus":
+            return FakeRequest(self.status_answers.pop(0))
+        return FakeRequest(self.command_answer)
 
     @property
     def status_requests(self) -> int:

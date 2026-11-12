@@ -11,7 +11,9 @@ if TYPE_CHECKING:
 class Scene:
     """A scene that the gateway can execute."""
 
-    def __init__(self, control: WebControlPro, id: int, names: list[str]) -> None:
+    def __init__(
+        self, control: WebControlPro, id: int, names: list[str], **kwargs: Any
+    ) -> None:
         self._control = control
         self._id = id
         self._names = names

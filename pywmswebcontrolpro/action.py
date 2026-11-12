@@ -70,8 +70,9 @@ class Action:
     ) -> None:
         """Create the action from the configuration of the gateway."""
         self._dest = dest
-        self._id = id
-        self._persist = (dest._persist / f"{id}.json") if dest._persist else None
+        # The id becomes part of a file path, so it must be a number.
+        self._id = int(id)
+        self._persist = (dest._persist / f"{self._id}.json") if dest._persist else None
         self._store = JsonStore(self._persist)
         self._actionType = WMS_WebControl_pro_API_actionType(actionType)
         self._actionDescription = WMS_WebControl_pro_API_actionDescription(
@@ -95,10 +96,14 @@ class Action:
         return f"<Action {self.id}: {self} ({self.actionType.name})>"
 
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, Action) and self.id == other.id
+        return (
+            isinstance(other, Action)
+            and self._dest == other._dest
+            and self.id == other.id
+        )
 
     def __hash__(self) -> int:
-        return hash(self.id)
+        return hash((self._dest.id, self.id))
 
     # --- Properties ---
 

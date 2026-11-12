@@ -1,6 +1,6 @@
 """A room of the gateway with its destinations and scenes."""
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .webcontrol import WebControlPro
@@ -16,6 +16,7 @@ class Room:
         name: str,
         destinations: list[int],
         scenes: list[int],
+        **kwargs: Any,
     ) -> None:
         self._control = control
         self._id = id
