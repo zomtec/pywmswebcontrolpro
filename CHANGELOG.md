@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1 (unreleased)
+
+Changed:
+
+- A measured tilt without a position is taken over by the movement model
+  (`Measurement.applied` is true). Before, the whole measurement was dropped.
+- `WebControlPro.refresh()` takes over changed names of known destinations and names
+  them in `ConfigChanges.renamed`.
+- Packages are only built and uploaded to TestPyPI and PyPI for a tag, no longer for
+  every push.
+
 ## 0.2.0
 
 Breaking changes:

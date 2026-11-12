@@ -39,12 +39,20 @@ DEFAULT_RETRY_DELAY = 1.0
 DEFAULT_REQUEST_SPACING = 0.5
 
 
+def _names(names: object) -> list[str]:
+    """Return the names of a destination or raise ValueError."""
+    if not isinstance(names, list) or not names:
+        raise ValueError(f"Unexpected names: {names!r}")
+    return [str(name) for name in names]
+
+
 @dataclass(frozen=True)
 class ConfigChanges:
-    """Destinations that appeared or disappeared with a configuration refresh."""
+    """Destinations that appeared, disappeared or got a new name with a refresh."""
 
     added: frozenset[int] = frozenset()
     removed: frozenset[int] = frozenset()
+    renamed: frozenset[int] = frozenset()
 
 
 class WebControlPro:
@@ -183,9 +191,10 @@ class WebControlPro:
         and leaves the known destinations, rooms and scenes unchanged.
 
         A destination that is already known stays the same object, so its
-        actions keep their movement model and stored state. Only new
-        destinations are created, and the result names the destinations that
-        appeared and disappeared. Rooms and scenes are created again.
+        actions keep their movement model and stored state. It takes over the
+        names of the configuration. Only new destinations are created, and the
+        result names the destinations that appeared, disappeared or got a new
+        name. Rooms and scenes are created again.
         """
         config = await self._getConfiguration()
         known = self._dests
@@ -196,6 +205,11 @@ class WebControlPro:
             }
             rooms = {room["id"]: Room(self, **room) for room in config["rooms"]}
             scenes = {scene["id"]: Scene(self, **scene) for scene in config["scenes"]}
+            names = {
+                dest["id"]: _names(dest["names"])
+                for dest in config["destinations"]
+                if dest["id"] in known
+            }
         except (KeyError, TypeError, ValueError) as err:
             raise WebControlProResponseError(
                 f"Unexpected configuration: {err!r}"
@@ -207,6 +221,11 @@ class WebControlPro:
         return ConfigChanges(
             added=frozenset(self._dests) - frozenset(known),
             removed=frozenset(known) - frozenset(self._dests),
+            renamed=frozenset(
+                dest_id
+                for dest_id, dest_names in names.items()
+                if dests[dest_id]._rename(dest_names)
+            ),
         )
 
     def dest(self, name: str) -> Destination:

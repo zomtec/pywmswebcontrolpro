@@ -226,10 +226,19 @@ class CoverModel:
     def apply_measurement(
         self, now: float, position: int | None, tilt: int | None
     ) -> Measurement:
-        """Take over a measured value unless a drive is running."""
+        """Take over a measured value unless a drive is running.
+
+        A tilt without a position is taken over as well, the position and its
+        source stay as they are.
+        """
         self.advance(now)
-        if self.is_travelling or position is None:
+        if self.is_travelling:
             return Measurement(applied=False, deviation=False)
+        if position is None:
+            if tilt is None:
+                return Measurement(applied=False, deviation=False)
+            self.tilt = int(clamp_percent(tilt) + 0.5)
+            return Measurement(applied=True, deviation=False)
         old = self.position
         self.position = clamp_percent(position)
         if tilt is not None:

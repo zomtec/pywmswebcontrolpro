@@ -142,9 +142,27 @@ def test_t11_measurement_after_travel_and_deviation():
 
 def test_t12_measurement_without_position():
     model = known(60, 10)
+    source = model.source
     result = model.apply_measurement(5.0, None, 90)
+    assert result == travel.Measurement(True, False)
+    assert model.position_int == 60
+    assert model.tilt == 90
+    assert model.source == source
+
+
+def test_t12_measurement_without_position_and_tilt():
+    model = known(60, 10)
+    result = model.apply_measurement(5.0, None, None)
     assert result == travel.Measurement(False, False)
     assert model.position_int == 60
+    assert model.tilt == 10
+
+
+def test_t12_tilt_measurement_during_a_drive_is_ignored():
+    model = known(60, 10)
+    model.start_move(0.0, 0, 20.0, 20.0)
+    result = model.apply_measurement(5.0, None, 90)
+    assert result == travel.Measurement(False, False)
     assert model.tilt == 10
 
 

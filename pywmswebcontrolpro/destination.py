@@ -88,6 +88,12 @@ class Destination:
         """Return the name of the destination."""
         return self._names[0]
 
+    def _rename(self, names: list[str]) -> bool:
+        """Take over the names of the configuration, True if the name changed."""
+        changed = names[0] != self.name
+        self._names = names
+        return changed
+
     @property
     def actions(self) -> dict[int, Action]:
         """Return the actions of the destination by id."""
