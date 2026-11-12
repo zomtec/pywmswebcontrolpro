@@ -4,6 +4,7 @@ import asyncio
 import pprint
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from types import MappingProxyType
@@ -31,6 +32,14 @@ from .scene import Scene
 DEFAULT_STALE_WARNING_AFTER = timedelta(hours=24)
 DEFAULT_RETRY_DELAY = 1.0
 DEFAULT_REQUEST_SPACING = 0.5
+
+
+@dataclass(frozen=True)
+class ConfigChanges:
+    """Destinations that appeared or disappeared with a configuration refresh."""
+
+    added: frozenset[int] = frozenset()
+    removed: frozenset[int] = frozenset()
 
 
 class WebControlPro:
@@ -143,15 +152,27 @@ class WebControlPro:
         ping = await self._ping()
         return ping["status"] == 0
 
-    async def refresh(self) -> None:
-        """Read the configuration and create destinations, rooms and scenes."""
+    async def refresh(self) -> ConfigChanges:
+        """Read the configuration and create destinations, rooms and scenes.
+
+        A destination that is already known stays the same object, so its
+        actions keep their movement model and stored state. Only new
+        destinations are created, and the result names the destinations that
+        appeared and disappeared. Rooms and scenes are created again.
+        """
         config = await self._getConfiguration()
         self._config = config
+        known = self._dests
         self._dests = {
-            dest["id"]: Destination(self, **dest) for dest in config["destinations"]
+            dest["id"]: known.get(dest["id"]) or Destination(self, **dest)
+            for dest in config["destinations"]
         }
         self._rooms = {room["id"]: Room(self, **room) for room in config["rooms"]}
         self._scenes = {scene["id"]: Scene(self, **scene) for scene in config["scenes"]}
+        return ConfigChanges(
+            added=frozenset(self._dests) - frozenset(known),
+            removed=frozenset(known) - frozenset(self._dests),
+        )
 
     def dest(self, name: str) -> Destination:
         """Return the destination with the given name or raise KeyError."""

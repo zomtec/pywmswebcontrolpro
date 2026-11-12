@@ -106,12 +106,13 @@ class FakeGateway:
     def __init__(self) -> None:
         self.status_answers: list[dict[str, Any] | Exception] = []
         self.requests: list[dict[str, Any]] = []
+        self.config = CONFIG
 
     def post(self, url: str, json: dict[str, Any], timeout: int) -> FakeRequest:
         """Answer one request of the library."""
         self.requests.append(json)
         if json["command"] == "getConfiguration":
-            return FakeRequest(CONFIG)
+            return FakeRequest(self.config)
         return FakeRequest(self.status_answers.pop(0))
 
     @property
