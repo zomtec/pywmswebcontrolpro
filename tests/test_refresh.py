@@ -202,3 +202,26 @@ def test_stats_stale_changes(
     ]
 
     assert reported == changes
+
+
+async def test_request_spacing_delays_the_next_status_request(
+    make_control: Callable[..., WebControlPro],
+    gateway: FakeGateway,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two status requests are at least request_spacing seconds apart."""
+    control = make_control(request_spacing=0.25)
+    await control.refresh()
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr("pywmswebcontrolpro.webcontrol.asyncio.sleep", fake_sleep)
+    gateway.status_answers = [status_ok(), status_ok()]
+
+    await control.dests[7].refresh(retries=0)
+    await control.dests[7].refresh(retries=0)
+
+    assert len(sleeps) == 1
+    assert 0 < sleeps[0] <= 0.25

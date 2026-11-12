@@ -25,6 +25,9 @@ of the actions. Only a "radio busy" answer is retried; with `retries=0` exactly 
 request is sent. On any failure the previous values stay unchanged. The outcome is
 truthy only for `ok`.
 
+`WebControlPro(request_spacing=...)` sets the minimum pause between two status requests
+to the hub (default 0.5 seconds).
+
 Failed refreshes are counted per destination (`Destination.stats`, also part of
 `diag()`) instead of being logged. A warning is logged once when a destination has
 failed continuously for `stale_warning_after` (default 24 hours) and once when it
