@@ -1,7 +1,7 @@
 # pywmswebcontrolpro
 
 Python library for the Warema WMS WebControl pro API. It is the companion library of the
-Home Assistant integration `ha_wms_webcontrol_pro`.
+Home Assistant integration [`wms_webcontrol_pro`](https://github.com/zomtec/ha_wms_webcontrol_pro).
 
 Reference: https://media.warema.com/dokumente/anleitungen-handbuecher/966664/warema_2064534_alhb_de_v0.pdf
 

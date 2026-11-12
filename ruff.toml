@@ -3,6 +3,8 @@ line-length = 88
 
 [lint]
 select = [
+    "ANN",  # type annotations
+    "D",  # docstrings
     "ASYNC",  # blocking calls in async code
     "B",  # bugbear
     "C4",  # comprehensions
@@ -21,11 +23,17 @@ select = [
     "W",  # pycodestyle warnings
 ]
 ignore = [
+    "ANN401",  # the answers of the gateway are untyped JSON
+    "D105",  # magic methods are self-explanatory
+    "D107",  # the class docstring describes the constructor
+    "D203",  # incompatible with D211
+    "D213",  # incompatible with D212
     "E501",  # line length is enforced by the formatter
 ]
 
 [lint.per-file-ignores]
-"simulator/**" = ["T20"]
+"tests/**" = ["D", "ANN"]
+"simulator/**" = ["D", "ANN", "T20"]
 "pywmswebcontrolpro/webcontrol.py" = ["T20"]  # example main prints
 
 [lint.isort]

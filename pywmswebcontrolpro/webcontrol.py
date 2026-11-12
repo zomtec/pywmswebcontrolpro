@@ -1,3 +1,5 @@
+"""Client of the local API of the WMS WebControl pro gateway."""
+
 import asyncio
 import pprint
 import time
@@ -7,7 +9,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
-from aiohttp import ClientSession
+from aiohttp import ClientSession, ClientTimeout
 
 from .const import (
     WMS_WebControl_pro_API_actionDescription,
@@ -32,6 +34,8 @@ DEFAULT_REQUEST_SPACING = 0.5
 
 
 class WebControlPro:
+    """Client of one WMS WebControl pro gateway."""
+
     def __init__(
         self,
         host: str,
@@ -42,7 +46,9 @@ class WebControlPro:
         retry_delay: float = DEFAULT_RETRY_DELAY,
         request_spacing: float = DEFAULT_REQUEST_SPACING,
     ) -> None:
-        """Create a client; stale_warning_after sets how long a destination may
+        """Create a client.
+
+        stale_warning_after sets how long a destination may
         stay silent before a warning is logged, retry_delay the pause in
         seconds between retries after a radio busy answer and request_spacing
         the minimum pause in seconds between two status requests.
@@ -57,14 +63,14 @@ class WebControlPro:
         self._control = f"http://{host}/commonCommand"
         self._session = session
         self._persist = Path(persist) if persist else None
-        self._config = {}
-        self._dests = {}
-        self._rooms = {}
-        self._scenes = {}
+        self._config: dict[str, Any] = {}
+        self._dests: dict[int, Destination] = {}
+        self._rooms: dict[int, Room] = {}
+        self._scenes: dict[int, Scene] = {}
 
     # --- Private methods ---
 
-    async def _commonCommand(self, command: str, **kwargs) -> Any:
+    async def _commonCommand(self, command: str, **kwargs: Any) -> Any:
         data = {
             "protocolVersion": WMS_WebControl_pro_API_protocolVersion,
             "command": command,
@@ -73,7 +79,9 @@ class WebControlPro:
         data.update(kwargs)
         async with (
             self._common_lock,
-            self._session.post(url=self._control, json=data, timeout=5) as response,
+            self._session.post(
+                url=self._control, json=data, timeout=ClientTimeout(total=5)
+            ) as response,
         ):
             return await response.json()
 
@@ -99,7 +107,11 @@ class WebControlPro:
                 self._status_last = time.monotonic()
 
     async def _action(
-        self, actions: list, responseType=WMS_WebControl_pro_API_responseType.Instant
+        self,
+        actions: list,
+        responseType: WMS_WebControl_pro_API_responseType = (
+            WMS_WebControl_pro_API_responseType.Instant
+        ),
     ) -> Any:
         return await self._commonCommand(
             WMS_WebControl_pro_API_command_action,
@@ -110,8 +122,12 @@ class WebControlPro:
     async def _sceneActions(
         self,
         sceneId: int,
-        sceneActionType=WMS_WebControl_pro_API_sceneActionType.Execute,
-        responseType=WMS_WebControl_pro_API_responseType.Instant,
+        sceneActionType: WMS_WebControl_pro_API_sceneActionType = (
+            WMS_WebControl_pro_API_sceneActionType.Execute
+        ),
+        responseType: WMS_WebControl_pro_API_responseType = (
+            WMS_WebControl_pro_API_responseType.Instant
+        ),
     ) -> Any:
         return await self._commonCommand(
             WMS_WebControl_pro_API_command_sceneActions,
@@ -123,10 +139,12 @@ class WebControlPro:
     # --- Public methods ---
 
     async def ping(self) -> bool:
+        """Return True if the gateway answers the ping."""
         ping = await self._ping()
         return ping["status"] == 0
 
     async def refresh(self) -> None:
+        """Read the configuration and create destinations, rooms and scenes."""
         config = await self._getConfiguration()
         self._config = config
         self._dests = {
@@ -136,12 +154,14 @@ class WebControlPro:
         self._scenes = {scene["id"]: Scene(self, **scene) for scene in config["scenes"]}
 
     def dest(self, name: str) -> Destination:
+        """Return the destination with the given name or raise KeyError."""
         for dest in self._dests.values():
             if dest.name == name:
                 return dest
         raise KeyError(f"Destination with name '{name}' not found")
 
     def diag(self) -> dict:
+        """Return the client for the diagnostics."""
         return {
             "host": self._host,
             "config": self._config,
@@ -154,26 +174,32 @@ class WebControlPro:
 
     @property
     def host(self) -> str:
+        """Return the host of the gateway."""
         return self._host
 
     @property
     def config(self) -> Mapping:
+        """Return the configuration of the gateway."""
         return MappingProxyType(self._config)
 
     @property
     def dests(self) -> Mapping:
+        """Return the destinations by id."""
         return MappingProxyType(self._dests)
 
     @property
     def rooms(self) -> Mapping:
+        """Return the rooms by id."""
         return MappingProxyType(self._rooms)
 
     @property
     def scenes(self) -> Mapping:
+        """Return the scenes by id."""
         return MappingProxyType(self._scenes)
 
 
-async def async_main_test():
+async def async_main_test() -> None:
+    """Run the example against a gateway named webcontrol."""
     async with ClientSession() as session:
         control = WebControlPro("webcontrol", session)
         pprint.pprint(await control.ping())
