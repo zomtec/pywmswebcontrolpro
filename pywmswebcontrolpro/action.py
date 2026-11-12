@@ -292,7 +292,7 @@ class Action:
     def apply_measurement(
         self, now: float, position: int | None, tilt: int | None
     ) -> Measurement:
-        """Take over a measured position unless a drive is running."""
+        """Take over a measured position or tilt unless a drive is running."""
         return self.model.apply_measurement(now, position, tilt)
 
     async def sync(self) -> None:
