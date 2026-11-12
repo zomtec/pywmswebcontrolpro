@@ -1,7 +1,7 @@
-from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
 import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 diag = {}
 
@@ -65,7 +65,7 @@ def main(server_class=HTTPServer, handler_class=Simulator):
         print(f"File {sys.argv[1]} not found")
         sys.exit(1)
 
-    with open(sys.argv[1], "r", encoding="utf-8") as f:
+    with open(sys.argv[1], encoding="utf-8") as f:
         global diag
         diag = json.load(f)
 
