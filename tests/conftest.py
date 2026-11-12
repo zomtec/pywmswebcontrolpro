@@ -16,6 +16,7 @@ from pywmswebcontrolpro.webcontrol import WebControlPro
 
 DEST_ID = 7
 ACTION_ID = 1
+SECOND_ACTION_ID = 2
 
 CONFIG = {
     "destinations": [
@@ -30,7 +31,14 @@ CONFIG = {
                     "actionDescription": (
                         WMS_WebControl_pro_API_actionDescription.RollerShutterBlindDrive
                     ),
-                }
+                },
+                {
+                    "id": SECOND_ACTION_ID,
+                    "actionType": WMS_WebControl_pro_API_actionType.Percentage,
+                    "actionDescription": (
+                        WMS_WebControl_pro_API_actionDescription.ValanceDrive
+                    ),
+                },
             ],
         }
     ],

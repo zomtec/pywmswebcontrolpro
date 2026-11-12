@@ -3,7 +3,7 @@
 import asyncio
 import json
 import logging
-from dataclasses import asdict, dataclass, fields
+from dataclasses import dataclass, fields
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -24,8 +24,8 @@ class TravelDirection(StrEnum):
 
 
 @dataclass(frozen=True)
-class DestinationSettings:
-    """Settings of a destination that the user can change.
+class ActionSettings:
+    """Settings of a drive action that the user can change.
 
     A travel time of 0 means unknown, the target of a drive is then taken over
     at once.
@@ -41,7 +41,7 @@ class DestinationSettings:
         return self.travel_time_close
 
     @classmethod
-    def from_dict(cls, data: Any) -> DestinationSettings:
+    def from_dict(cls, data: Any) -> ActionSettings:
         """Build settings from stored data, invalid values become 0."""
         if not isinstance(data, dict):
             return cls()
@@ -54,8 +54,8 @@ def _valid_seconds(value: Any) -> float:
     return float(value) if value >= 0 else 0.0
 
 
-class DestinationStore:
-    """JSON file with the settings and the last state of one destination.
+class JsonStore:
+    """JSON file with the persistent data of one action.
 
     Reads and writes are serialized and a write replaces the file atomically.
     Without a path nothing is stored.
@@ -76,32 +76,26 @@ class DestinationStore:
         if self._path is None:
             return {}
         async with self._lock:
-            return await self._read()
+            return await self._read(self._path)
 
-    async def _read(self) -> dict[str, Any]:
-        assert self._path is not None
-        if not await aio_path.exists(self._path):
+    @staticmethod
+    async def _read(path: Path) -> dict[str, Any]:
+        if not await aio_path.exists(path):
             return {}
-        async with aiofiles.open(self._path) as file:
+        async with aiofiles.open(path) as file:
             content = await file.read()
         try:
             data = json.loads(content)
         except json.JSONDecodeError:
-            _LOGGER.warning("Ignoring unreadable settings file %s", self._path)
+            _LOGGER.warning("Ignoring unreadable file %s", path)
             return {}
         return data if isinstance(data, dict) else {}
 
-    async def save(self, settings: DestinationSettings, state: dict[str, Any]) -> None:
-        """Replace the file with the given settings and state."""
+    async def save(self, data: dict[str, Any]) -> None:
+        """Replace the file with the given data."""
         if self._path is None:
             return
-        content = json.dumps(
-            {
-                "version": STORE_VERSION,
-                "settings": asdict(settings),
-                "state": state,
-            }
-        )
+        content = json.dumps(data)
         temp = self._path.with_name(self._path.name + ".tmp")
         async with self._lock:
             await makedirs(self._path.parent, exist_ok=True)
