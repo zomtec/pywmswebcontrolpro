@@ -10,13 +10,28 @@ from .const import (
     WMS_WebControl_pro_API_responseType,
 )
 from .store import STORE_VERSION, ActionSettings, JsonStore, TravelDirection
-from .travel import CoverModel, Measurement
+from .travel import CoverModel, Measurement, rotation_to_tilt, tilt_to_rotation
 
 if TYPE_CHECKING:
     from .destination import Destination
     from .webcontrol import WebControlPro
 
 _STORED_KEYS = frozenset({"version", "overwrites", "settings", "state"})
+
+# Firmware bug of the WMS WebControl pro: the hub reports the rotation limits
+# of slat drives as -127 and 127, the drives turn from -75 to 75. Warema knows
+# the bug and has not fixed it. While the hub reports exactly these limits,
+# -75 and 75 are used instead. A rotation measured beyond them widens the
+# range, and the user can overwrite it. The workaround ends by itself when a
+# firmware reports other limits and can then be removed.
+ROTATION_LIMIT_REPORTED_BY_BUG = 127
+ROTATION_LIMIT_DEFAULT = 75
+_MIN_VALUE = "minValue"
+_MAX_VALUE = "maxValue"
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
 
 
 class ActionList(list):
@@ -63,6 +78,7 @@ class Action:
             actionDescription
         )
         self._attrs = kwargs
+        self._defaults = self._rotation_defaults()
         self._params: dict[str, Any] = {}
         self._overwrites: dict[str, Any] = {}
         self._needs_load = True
@@ -108,8 +124,41 @@ class Action:
 
     # --- Private methods ---
 
+    def _rotation_defaults(self) -> dict[str, Any]:
+        if (
+            self._actionType is WMS_WebControl_pro_API_actionType.Rotation
+            and self._attrs.get(_MIN_VALUE) == -ROTATION_LIMIT_REPORTED_BY_BUG
+            and self._attrs.get(_MAX_VALUE) == ROTATION_LIMIT_REPORTED_BY_BUG
+        ):
+            return {
+                _MIN_VALUE: -ROTATION_LIMIT_DEFAULT,
+                _MAX_VALUE: ROTATION_LIMIT_DEFAULT,
+            }
+        return {}
+
     def _update_params(self, value: dict) -> None:
         self._params.update(value)
+        self._learn_rotation_range(value.get("rotation"))
+
+    def _learn_rotation_range(self, rotation: Any) -> None:
+        if (
+            self._actionType is not WMS_WebControl_pro_API_actionType.Rotation
+            or not _is_number(rotation)
+        ):
+            return
+        reported_min, reported_max = self.reported_rotation_range
+        if not (_is_number(reported_min) and _is_number(reported_max)):
+            return
+        # The reported limits themselves are no real position of a drive.
+        if not reported_min < rotation < reported_max:
+            return
+        minimum, maximum = self.rotation_range
+        if rotation < minimum:
+            self._overwrites[_MIN_VALUE] = rotation
+            self._needs_save = True
+        elif rotation > maximum:
+            self._overwrites[_MAX_VALUE] = rotation
+            self._needs_save = True
 
     async def _load_persists(self) -> None:
         data = await self._store.load()
@@ -164,6 +213,46 @@ class Action:
         )
         await self._save_persists()
 
+    @property
+    def reported_rotation_range(self) -> tuple[Any, Any]:
+        """Return the rotation limits as the hub reports them."""
+        return self._attrs.get(_MIN_VALUE), self._attrs.get(_MAX_VALUE)
+
+    @property
+    def rotation_range(self) -> tuple[float, float]:
+        """Return the rotation limits in use, minimum and maximum.
+
+        An overwrite wins over the default for the firmware bug, which wins
+        over the limits of the hub.
+        """
+        return self.minValue, self.maxValue
+
+    async def set_rotation_range(
+        self, *, minimum: float | None = None, maximum: float | None = None
+    ) -> None:
+        """Overwrite one or both rotation limits and store them."""
+        await self._ensure_loaded()
+        if minimum is not None:
+            self._overwrites[_MIN_VALUE] = minimum
+        if maximum is not None:
+            self._overwrites[_MAX_VALUE] = maximum
+        await self._save_persists()
+
+    async def reset_rotation_range(self) -> None:
+        """Remove the overwritten rotation limits and store that."""
+        await self._ensure_loaded()
+        self._overwrites.pop(_MIN_VALUE, None)
+        self._overwrites.pop(_MAX_VALUE, None)
+        await self._save_persists()
+
+    def rotation_to_tilt(self, rotation: float) -> int:
+        """Convert a rotation to a tilt (0 closed, 100 open) with the limits in use."""
+        return rotation_to_tilt(rotation, *self.rotation_range)
+
+    def tilt_to_rotation(self, tilt: float) -> int:
+        """Convert a tilt (0 closed, 100 open) to a rotation with the limits in use."""
+        return tilt_to_rotation(tilt, *self.rotation_range)
+
     def start_move(self, now: float, target: float, tilt: int | None = None) -> float:
         """Handle an accepted drive command with the stored travel times.
 
@@ -193,10 +282,14 @@ class Action:
             await self._save_persists()
 
     def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
         if name in self._overwrites:
             return self._overwrites[name]
         if name.startswith("wms__"):
-            name = name[5:]
+            return self._attrs.get(name[5:])
+        if name in self._defaults:
+            return self._defaults[name]
         return self._attrs.get(name)
 
     def __getitem__(self, name: str) -> Any:
@@ -250,6 +343,7 @@ class Action:
             "attrs": self._attrs,
             "params": self._params,
             "overwrites": self._overwrites,
+            "defaults": self._defaults,
             "settings": asdict(self._settings),
             "model": {
                 **self.model.snapshot(),

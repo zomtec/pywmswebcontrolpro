@@ -55,6 +55,28 @@ independently. After a restart the position is restored from the file and marked
 `restored` until a measurement arrives. Call `Action.sync()` after commands and
 measurements to store changes; `Destination.refresh` does it as well.
 
+## Rotation limits of slat drives (firmware bug)
+
+The hub reports the rotation limits of slat drives as -127 and 127. The drives turn
+from -75 to 75, so a tilt calculated from the reported limits is wrong: closed slats
+(rotation 75) would be shown as 21 % open. Warema knows the bug, a fixed firmware has
+not been announced.
+
+The library works around it in `pywmswebcontrolpro/action.py`:
+
+- While the hub reports exactly -127 and 127 for a rotation action, `Action.rotation_range`
+  is -75 to 75. `Action.reported_rotation_range` returns the limits of the hub.
+- A rotation that is measured beyond the range in use widens it. The limits of the hub
+  themselves (-127 and 127) are never learned.
+- `Action.set_rotation_range` overwrites the limits, `Action.reset_rotation_range`
+  returns to the default. Both are stored in the file of the action.
+- `Action.rotation_to_tilt` and `Action.tilt_to_rotation` convert with the limits in
+  use. The minimum rotation is tilt 100, the maximum rotation is tilt 0, and the
+  rotation that is sent is a whole number within the limits.
+
+The workaround ends by itself when a firmware reports other limits. It can be removed
+from the library once such a firmware is available.
+
 ## Development
 
 ```bash
