@@ -30,6 +30,21 @@ Failed refreshes are counted per destination (`Destination.stats`, also part of
 failed continuously for `stale_warning_after` (default 24 hours) and once when it
 delivers data again.
 
+## Settings, movement model and stored state
+
+Each destination keeps a `settings.json` next to its action files
+(`<persist>/<destination id>/settings.json`), written atomically and serialized
+against concurrent access. It holds the travel times for a full drive
+(`Destination.set_travel_time`, 0 means unknown) and the last known position and
+tilt. Without a persist path nothing is stored.
+
+`Destination.model` is the movement model of a cover: `start_move`, `stop`,
+`set_tilt` and `apply_measurement` calculate the displayed position, which is
+replaced by a measured value when the cover stands still. After a restart the
+position is restored from the file and marked as `restored` until a measurement
+arrives. Call `Destination.sync()` after commands and measurements to store changes;
+`refresh` does it as well.
+
 ## Development
 
 ```bash

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Mapping
+from dataclasses import asdict, replace
 from types import MappingProxyType
 from typing import Any
 
@@ -22,8 +23,11 @@ from .refresh import (
     StaleChange,
 )
 from .room import Room
+from .store import DestinationSettings, DestinationStore, TravelDirection
+from .travel import CoverModel, Measurement
 
 DEFAULT_REFRESH_RETRIES = 2
+SETTINGS_FILE = "settings.json"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +48,13 @@ class Destination:
         self._blocking = None
         self._status = {}
         self._stats = RefreshStats()
+        self._store = DestinationStore(
+            self._persist / SETTINGS_FILE if self._persist else None
+        )
+        self._settings = DestinationSettings()
+        self._saved_state: dict[str, Any] | None = None
+        self._loaded = False
+        self.model = CoverModel()
 
     def __str__(self) -> str:
         return self.name
@@ -105,6 +116,72 @@ class Destination:
 
     # --- Public methods ---
 
+    @property
+    def settings(self) -> DestinationSettings:
+        """Return the settings of this destination."""
+        return self._settings
+
+    async def set_travel_time(self, direction: TravelDirection, seconds: float) -> None:
+        """Store the travel time of a full drive in seconds, 0 means unknown."""
+        if not seconds >= 0:
+            raise ValueError(f"Travel time must not be negative: {seconds}")
+        await self._ensure_loaded()
+        self._settings = replace(
+            self._settings, **{f"travel_time_{direction.value}": float(seconds)}
+        )
+        await self._save()
+
+    def start_move(self, now: float, target: float, tilt: int | None = None) -> float:
+        """Handle an accepted drive command with the stored travel times.
+
+        Returns the delay in seconds until the settle poll.
+        """
+        return self.model.start_move(
+            now,
+            target,
+            self._settings.travel_time(TravelDirection.OPEN),
+            self._settings.travel_time(TravelDirection.CLOSE),
+            tilt,
+        )
+
+    def apply_measurement(
+        self, now: float, position: int | None, tilt: int | None
+    ) -> Measurement:
+        """Take over a measured position unless a drive is running."""
+        return self.model.apply_measurement(now, position, tilt)
+
+    async def sync(self) -> None:
+        """Load stored data once and store changes of settings and state.
+
+        Call this after commands and measurements. refresh calls it as well.
+        """
+        for action in self._actions.values():
+            await action.sync()
+        await self._ensure_loaded()
+        if self.model.snapshot() != self._saved_state:
+            await self._save()
+
+    async def _ensure_loaded(self) -> None:
+        if self._loaded:
+            return
+        self._loaded = True
+        data = await self._store.load()
+        self._settings = DestinationSettings.from_dict(data.get("settings"))
+        state = data.get("state")
+        if isinstance(state, dict):
+            self.model.restore(
+                state.get("position"),
+                state.get("tilt"),
+                state.get("target_position"),
+                state.get("target_tilt"),
+            )
+        self._saved_state = self.model.snapshot()
+
+    async def _save(self) -> None:
+        state = self.model.snapshot()
+        await self._store.save(self._settings, state)
+        self._saved_state = state
+
     async def refresh(
         self, retries: int = DEFAULT_REFRESH_RETRIES, *, raise_on_error: bool = False
     ) -> RefreshOutcome:
@@ -114,8 +191,7 @@ class Destination:
         previously known values stay unchanged. The outcome is counted in
         stats instead of being logged for every failure.
         """
-        for action in self._actions.values():
-            await action.sync()
+        await self.sync()
 
         outcome = await self._request_status(retries, raise_on_error)
         self._record(outcome.result)
@@ -243,4 +319,9 @@ class Destination:
             "blocking": self._blocking,
             "status": self._status,
             "stats": self._stats.as_dict(),
+            "settings": asdict(self._settings),
+            "model": {
+                **self.model.snapshot(),
+                "source": self.model.source.value if self.model.source else None,
+            },
         }
