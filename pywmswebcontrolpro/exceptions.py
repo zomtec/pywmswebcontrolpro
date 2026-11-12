@@ -1,5 +1,7 @@
 """Errors of the communication with the WMS WebControl pro gateway."""
 
+from typing import Any
+
 
 class WebControlProError(Exception):
     """Base of all errors of this library."""
@@ -16,7 +18,7 @@ class WebControlProResponseError(WebControlProError):
 class WebControlProCommandError(WebControlProError):
     """The gateway rejected a command, for example because the radio is busy."""
 
-    def __init__(self, errors: list) -> None:
+    def __init__(self, errors: list[Any]) -> None:
         """Keep the error codes of the gateway."""
         super().__init__(f"The gateway rejected the command: {errors}")
         self.errors = errors

@@ -61,7 +61,7 @@ class Scene:
         """Execute the scene and return the answer of the gateway."""
         return await self._control._sceneActions(self._id, **kwargs)
 
-    def diag(self) -> dict:
+    def diag(self) -> dict[str, Any]:
         """Return the scene for the diagnostics."""
         return {
             "id": self.id,

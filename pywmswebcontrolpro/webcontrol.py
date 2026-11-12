@@ -141,7 +141,7 @@ class WebControlPro:
 
     async def _action(
         self,
-        actions: list,
+        actions: list[dict[str, Any]],
         responseType: WMS_WebControl_pro_API_responseType = (
             WMS_WebControl_pro_API_responseType.Instant
         ),
@@ -216,7 +216,7 @@ class WebControlPro:
                 return dest
         raise KeyError(f"Destination with name '{name}' not found")
 
-    def diag(self) -> dict:
+    def diag(self) -> dict[str, Any]:
         """Return the client for the diagnostics."""
         return {
             "host": self._host,
@@ -234,22 +234,22 @@ class WebControlPro:
         return self._host
 
     @property
-    def config(self) -> Mapping:
+    def config(self) -> Mapping[str, Any]:
         """Return the configuration of the gateway."""
         return MappingProxyType(self._config)
 
     @property
-    def dests(self) -> Mapping:
+    def dests(self) -> Mapping[int, Destination]:
         """Return the destinations by id."""
         return MappingProxyType(self._dests)
 
     @property
-    def rooms(self) -> Mapping:
+    def rooms(self) -> Mapping[int, Room]:
         """Return the rooms by id."""
         return MappingProxyType(self._rooms)
 
     @property
-    def scenes(self) -> Mapping:
+    def scenes(self) -> Mapping[int, Scene]:
         """Return the scenes by id."""
         return MappingProxyType(self._scenes)
 

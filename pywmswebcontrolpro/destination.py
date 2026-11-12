@@ -89,7 +89,7 @@ class Destination:
         return self._names[0]
 
     @property
-    def actions(self) -> dict:
+    def actions(self) -> dict[int, Action]:
         """Return the actions of the destination by id."""
         return self._actions
 
@@ -117,7 +117,7 @@ class Destination:
         return not (self._heartbeatError or self._blocking)
 
     @property
-    def status(self) -> Mapping:
+    def status(self) -> Mapping[str, Any]:
         """Return the last status that the gateway answered."""
         return MappingProxyType(self._status)
 
@@ -152,7 +152,7 @@ class Destination:
     async def _request_status(
         self, retries: int, raise_on_error: bool
     ) -> RefreshOutcome:
-        status: dict = {}
+        status: dict[str, Any] = {}
         for attempt in range(retries + 1):
             try:
                 status = await self._control._getStatus(self._id)
@@ -183,7 +183,7 @@ class Destination:
         self._status = status
         return RefreshOutcome(RefreshResult.OK, values)
 
-    def _apply_status(self, status: dict) -> dict[int, dict[str, Any]] | None:
+    def _apply_status(self, status: dict[str, Any]) -> dict[int, dict[str, Any]] | None:
         values: dict[int, dict[str, Any]] = {}
         refreshed = False
         for detail in status.get("details") or ():
@@ -266,7 +266,7 @@ class Destination:
             f"and type {type_name} in {self} ({self._id})"
         )
 
-    def diag(self) -> dict:
+    def diag(self) -> dict[str, Any]:
         """Return the destination for the diagnostics."""
         return {
             "id": self.id,

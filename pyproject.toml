@@ -7,6 +7,9 @@ license-files = ["LICENSE"]
 authors = [
     { name = "Marc Hoersken", email = "info@marc-hoersken.de" }
 ]
+maintainers = [
+    { name = "zomtec" }
+]
 readme = "README.md"
 repository = "https://github.com/zomtec/pywmswebcontrolpro"
 keywords = ["warema", "wms", "webcontrol"]

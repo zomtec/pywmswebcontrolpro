@@ -41,7 +41,7 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool)
 
 
-class ActionList(list):
+class ActionList(list[dict[str, Any]]):
     """Actions that are sent to the gateway with one request."""
 
     def __init__(self, control: WebControlPro) -> None:
@@ -149,7 +149,7 @@ class Action:
             }
         return {}
 
-    def _update_params(self, value: dict) -> None:
+    def _update_params(self, value: dict[str, Any]) -> None:
         self._params.update(value)
         self._learn_rotation_range(value.get("rotation"))
 
@@ -357,7 +357,7 @@ class Action:
             responseType=responseType,
         )
 
-    def diag(self) -> dict:
+    def diag(self) -> dict[str, Any]:
         """Return the action for the diagnostics."""
         return {
             "id": self.id,

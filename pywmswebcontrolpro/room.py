@@ -3,6 +3,8 @@
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from .destination import Destination
+    from .scene import Scene
     from .webcontrol import WebControlPro
 
 
@@ -54,14 +56,14 @@ class Room:
         return self._name
 
     @property
-    def destinations(self) -> dict:
+    def destinations(self) -> dict[int, Destination]:
         """Return the destinations of the room by id."""
         return {
             dest_id: self._control.dests[dest_id] for dest_id in self._destination_ids
         }
 
     @property
-    def scenes(self) -> dict:
+    def scenes(self) -> dict[int, Scene]:
         """Return the scenes of the room by id."""
         return {
             scene_id: self._control.scenes[scene_id] for scene_id in self._scene_ids
@@ -69,7 +71,7 @@ class Room:
 
     # --- Public methods ---
 
-    def diag(self) -> dict:
+    def diag(self) -> dict[str, Any]:
         """Return the room for the diagnostics."""
         return {
             "id": self.id,
