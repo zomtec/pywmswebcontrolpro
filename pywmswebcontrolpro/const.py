@@ -1,3 +1,5 @@
+"""Constants and enumerations of the WMS WebControl pro API."""
+
 from enum import IntEnum
 
 WMS_WebControl_pro_API_protocolVersion = "1.0"
@@ -11,6 +13,8 @@ WMS_WebControl_pro_API_command_sceneActions = "sceneActions"
 
 
 class WMS_WebControl_pro_API_animationType(IntEnum):
+    """Kind of device that a destination controls."""
+
     VenetianBlind = 0
     Awning = 1
     RollerShutterBlind = 2
@@ -22,6 +26,8 @@ class WMS_WebControl_pro_API_animationType(IntEnum):
 
 
 class WMS_WebControl_pro_API_actionType(IntEnum):
+    """Kind of value or command of an action."""
+
     Percentage = 0
     PercentageDelta = 1
     Rotation = 2
@@ -36,6 +42,8 @@ class WMS_WebControl_pro_API_actionType(IntEnum):
 
 
 class WMS_WebControl_pro_API_actionDescription(IntEnum):
+    """Function of an action, for example awning drive or light switch."""
+
     AwningDrive = 0
     ValanceDrive = 1
     SlatDrive = 2
@@ -54,16 +62,22 @@ class WMS_WebControl_pro_API_actionDescription(IntEnum):
 
 
 class WMS_WebControl_pro_API_responseType(IntEnum):
+    """How much the gateway answers to a command."""
+
     Instant = 0
     Detailed = 1
 
 
 class WMS_WebControl_pro_API_sceneActionType(IntEnum):
+    """Command for a scene."""
+
     Relearn = 0
     Execute = 1
 
 
 class WMS_WebControl_pro_API_drivingCause(IntEnum):
+    """Reason why a drive moved last."""
+
     _None = 0  # No driving cause
     Sun = 1
     DuskDawn = 2

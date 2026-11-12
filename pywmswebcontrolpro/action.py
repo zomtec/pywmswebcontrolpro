@@ -1,6 +1,8 @@
+"""An action of a destination with its stored settings and movement model."""
+
 import math
 from dataclasses import asdict, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .const import (
     WMS_WebControl_pro_API_actionDescription,
@@ -10,17 +12,28 @@ from .const import (
 from .store import STORE_VERSION, ActionSettings, JsonStore, TravelDirection
 from .travel import CoverModel, Measurement
 
+if TYPE_CHECKING:
+    from .destination import Destination
+    from .webcontrol import WebControlPro
+
 _STORED_KEYS = frozenset({"version", "overwrites", "settings", "state"})
 
 
 class ActionList(list):
-    def __init__(self, control) -> None:
+    """Actions that are sent to the gateway with one request."""
+
+    def __init__(self, control: WebControlPro) -> None:
+        """Create an empty list for the given client."""
         super().__init__()
         self._control = control
 
     async def __call__(
-        self, responseType=WMS_WebControl_pro_API_responseType.Instant
+        self,
+        responseType: WMS_WebControl_pro_API_responseType = (
+            WMS_WebControl_pro_API_responseType.Instant
+        ),
     ) -> Any:
+        """Send all actions and return the answer of the gateway."""
         if len(self) == 0:
             raise ValueError("ActionList is empty")
         return await self._control._action(
@@ -30,9 +43,17 @@ class ActionList(list):
 
 
 class Action:
+    """One function of a destination, for example moving an awning."""
+
     def __init__(
-        self, dest, id: int, actionType: int, actionDescription: int, **kwargs
+        self,
+        dest: Destination,
+        id: int,
+        actionType: int,
+        actionDescription: int,
+        **kwargs: Any,
     ) -> None:
+        """Create the action from the configuration of the gateway."""
         self._dest = dest
         self._id = id
         self._persist = (dest._persist / f"{id}.json") if dest._persist else None
@@ -42,8 +63,8 @@ class Action:
             actionDescription
         )
         self._attrs = kwargs
-        self._params = {}
-        self._overwrites = {}
+        self._params: dict[str, Any] = {}
+        self._overwrites: dict[str, Any] = {}
         self._needs_load = True
         self._needs_save = False
         self._extra: dict[str, Any] = {}
@@ -57,8 +78,8 @@ class Action:
     def __repr__(self) -> str:
         return f"<Action {self.id}: {self} ({self.actionType.name})>"
 
-    def __eq__(self, other) -> bool:
-        return self.id == other.id
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Action) and self.id == other.id
 
     def __hash__(self) -> int:
         return hash(self.id)
@@ -67,18 +88,22 @@ class Action:
 
     @property
     def host(self) -> str:
+        """Return the host of the gateway."""
         return self._dest.host
 
     @property
     def id(self) -> int:
+        """Return the id of the action."""
         return self._id
 
     @property
     def actionType(self) -> WMS_WebControl_pro_API_actionType:
+        """Return the kind of value or command of the action."""
         return self._actionType
 
     @property
     def actionDescription(self) -> WMS_WebControl_pro_API_actionDescription:
+        """Return the function of the action."""
         return self._actionDescription
 
     # --- Private methods ---
@@ -191,7 +216,8 @@ class Action:
             del self._overwrites[name]
             self._needs_save = True
 
-    def prep(self, **kwargs) -> ActionList:
+    def prep(self, **kwargs: Any) -> ActionList:
+        """Return an action list with this action and the given parameters."""
         actionList = ActionList(self._dest._control)
         actionList.append(
             {
@@ -203,14 +229,20 @@ class Action:
         return actionList
 
     async def __call__(
-        self, responseType=WMS_WebControl_pro_API_responseType.Instant, **kwargs
+        self,
+        responseType: WMS_WebControl_pro_API_responseType = (
+            WMS_WebControl_pro_API_responseType.Instant
+        ),
+        **kwargs: Any,
     ) -> Any:
+        """Send the action with the given parameters to the gateway."""
         return await self._dest._control._action(
             actions=self.prep(**kwargs),
             responseType=responseType,
         )
 
     def diag(self) -> dict:
+        """Return the action for the diagnostics."""
         return {
             "id": self.id,
             "actionType": self.actionType.name,

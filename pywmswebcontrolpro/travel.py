@@ -81,12 +81,20 @@ class CoverModel:
     @property
     def is_opening(self) -> bool:
         """Return True while an interpolated drive moves towards open."""
-        return self.is_travelling and self._target > self._start
+        return (
+            self._target is not None
+            and self._start is not None
+            and self._target > self._start
+        )
 
     @property
     def is_closing(self) -> bool:
         """Return True while an interpolated drive moves towards closed."""
-        return self.is_travelling and self._target < self._start
+        return (
+            self._target is not None
+            and self._start is not None
+            and self._target < self._start
+        )
 
     @property
     def position_int(self) -> int | None:
@@ -109,7 +117,12 @@ class CoverModel:
 
         Returns True if a drive reached its target with this call.
         """
-        if not self.is_travelling:
+        if (
+            self._target is None
+            or self._start is None
+            or self._started_at is None
+            or self._duration is None
+        ):
             return False
         elapsed = max(0.0, now - self._started_at)
         if elapsed >= self._duration:
@@ -235,7 +248,7 @@ class CoverModel:
             "position": self.position_int,
             "tilt": self.tilt,
             "target_position": (
-                int(self._target + 0.5) if self.is_travelling else None
+                int(self._target + 0.5) if self._target is not None else None
             ),
             "target_tilt": self._pending_tilt if self.is_travelling else None,
         }

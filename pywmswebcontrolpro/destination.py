@@ -1,9 +1,11 @@
+"""A destination of the gateway, for example a drive, a light or a load."""
+
 import asyncio
 import logging
 import time
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 
@@ -23,14 +25,24 @@ from .refresh import (
 )
 from .room import Room
 
+if TYPE_CHECKING:
+    from .webcontrol import WebControlPro
+
 DEFAULT_REFRESH_RETRIES = 2
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class Destination:
+    """A component of the gateway with its actions and the last known status."""
+
     def __init__(
-        self, control, id: int, names: list, actions: list, animationType: int
+        self,
+        control: WebControlPro,
+        id: int,
+        names: list[str],
+        actions: list[dict[str, Any]],
+        animationType: int,
     ) -> None:
         self._control = control
         self._id = id
@@ -39,10 +51,10 @@ class Destination:
         self._actions = {action["id"]: Action(self, **action) for action in actions}
         self._animationType = WMS_WebControl_pro_API_animationType(animationType)
         self._drivingCause = WMS_WebControl_pro_API_drivingCause.Unknown
-        self._unknownProducts = {}
+        self._unknownProducts: dict[int, Any] = {}
         self._heartbeatError = None
         self._blocking = None
-        self._status = {}
+        self._status: dict[str, Any] = {}
         self._stats = RefreshStats()
 
     def __str__(self) -> str:
@@ -51,8 +63,8 @@ class Destination:
     def __repr__(self) -> str:
         return f"<Destination {self.id}: {self}>"
 
-    def __eq__(self, other) -> bool:
-        return self.id == other.id
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Destination) and self.id == other.id
 
     def __hash__(self) -> int:
         return hash(self.id)
@@ -61,30 +73,37 @@ class Destination:
 
     @property
     def host(self) -> str:
+        """Return the host of the gateway."""
         return self._control.host
 
     @property
     def id(self) -> int:
+        """Return the id of the destination."""
         return self._id
 
     @property
     def name(self) -> str:
+        """Return the name of the destination."""
         return self._names[0]
 
     @property
     def actions(self) -> dict:
+        """Return the actions of the destination by id."""
         return self._actions
 
     @property
     def animationType(self) -> WMS_WebControl_pro_API_animationType:
+        """Return the kind of device that the destination controls."""
         return self._animationType
 
     @property
     def drivingCause(self) -> WMS_WebControl_pro_API_drivingCause:
+        """Return why the drive moved last."""
         return self._drivingCause
 
     @property
     def room(self) -> Room | None:
+        """Return the room of the destination, if it belongs to one."""
         for room in self._control.rooms.values():
             if self._id in room._destination_ids:
                 return room
@@ -92,10 +111,12 @@ class Destination:
 
     @property
     def available(self) -> bool:
+        """Return False while the gateway reports an error or a blocked drive."""
         return not (self._heartbeatError or self._blocking)
 
     @property
     def status(self) -> Mapping:
+        """Return the last status that the gateway answered."""
         return MappingProxyType(self._status)
 
     @property
@@ -209,6 +230,7 @@ class Destination:
         actionDescription: WMS_WebControl_pro_API_actionDescription,
         actionType: WMS_WebControl_pro_API_actionType | None = None,
     ) -> bool:
+        """Return True if the destination has a matching action."""
         for action in self._actions.values():
             if action.actionDescription == actionDescription and (
                 actionType is None or actionType == action.actionType
@@ -221,6 +243,7 @@ class Destination:
         actionDescription: WMS_WebControl_pro_API_actionDescription,
         actionType: WMS_WebControl_pro_API_actionType | None = None,
     ) -> Action:
+        """Return the matching action or raise NotImplementedError."""
         for action in self._actions.values():
             if action.actionDescription == actionDescription and (
                 actionType is None or actionType == action.actionType
@@ -234,6 +257,7 @@ class Destination:
         )
 
     def diag(self) -> dict:
+        """Return the destination for the diagnostics."""
         return {
             "id": self.id,
             "name": self.name,
