@@ -201,10 +201,10 @@ class WebControlPro:
         name. Rooms and scenes are created again.
         """
         config = await self._getConfiguration()
-        # New actions read their stored data when they are created.
-        await self._store.load()
         known = self._dests
         try:
+            # New actions read their stored data when they are created.
+            await self._store.load([int(dest["id"]) for dest in config["destinations"]])
             dests = {
                 dest["id"]: known.get(dest["id"]) or Destination(self, **dest)
                 for dest in config["destinations"]

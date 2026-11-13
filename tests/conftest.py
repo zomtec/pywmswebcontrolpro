@@ -72,14 +72,14 @@ STATUS_EMPTY: dict[str, Any] = {}
 STATUS_NO_DETAILS = {"details": []}
 
 
-def stored_settings(persist: Path) -> Any:
-    """Return the settings in the file by destination and action."""
-    return json.loads((persist / SETTINGS_FILE).read_text())["destinations"]
+def stored_settings(persist: Path, dest_id: int = DEST_ID) -> Any:
+    """Return the settings in the file of a destination by action."""
+    return json.loads((persist / str(dest_id) / SETTINGS_FILE).read_text())["actions"]
 
 
-def stored_state(persist: Path) -> Any:
-    """Return the states in the file by destination and action."""
-    return json.loads((persist / STATE_FILE).read_text())["destinations"]
+def stored_state(persist: Path, dest_id: int = DEST_ID) -> Any:
+    """Return the states in the file of a destination by action."""
+    return json.loads((persist / str(dest_id) / STATE_FILE).read_text())["actions"]
 
 
 class FakeResponse:

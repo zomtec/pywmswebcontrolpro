@@ -24,14 +24,17 @@ from .conftest import (
     ACTION_ID,
     DEST_ID,
     SECOND_ACTION_ID,
+    FakeGateway,
     stored_settings,
     stored_state,
 )
 
 type ControlFactory = Callable[..., WebControlPro]
 
-DEST = str(DEST_ID)
+OTHER_DEST_ID = 99
 ACTION = str(ACTION_ID)
+DEST_SETTINGS = f"{DEST_ID}/{SETTINGS_FILE}"
+DEST_STATE = f"{DEST_ID}/{STATE_FILE}"
 
 
 async def new_action(
@@ -45,10 +48,17 @@ async def new_action(
     return control.dests[DEST_ID].actions[action_id]
 
 
+def dest_dir(persist: Path, dest_id: int = DEST_ID) -> Path:
+    """Return the directory with the files of a destination."""
+    return persist / str(dest_id)
+
+
 def write_file(persist: Path, name: str, entry: object) -> None:
     """Write a stored file with one entry for the test action."""
-    (persist / name).write_text(
-        json.dumps({"version": STORE_VERSION, "destinations": {DEST: {ACTION: entry}}})
+    directory = dest_dir(persist)
+    directory.mkdir(exist_ok=True)
+    (directory / name).write_text(
+        json.dumps({"version": STORE_VERSION, "actions": {ACTION: entry}})
     )
 
 
@@ -63,12 +73,12 @@ def temporary_files(path: Path) -> list[Path]:
 
 
 def count_writes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Return a list that collects the name of every file that is written."""
+    """Return a list that collects every written file as destination/name."""
     writes: list[str] = []
     original = store._write
 
     def counting_write(path: Path, content: str) -> None:
-        writes.append(path.name)
+        writes.append(f"{path.parent.name}/{path.name}")
         original(path, content)
 
     monkeypatch.setattr(store, "_write", counting_write)
@@ -161,8 +171,8 @@ async def test_drive_actions_are_independent(
 
     assert second.settings == ActionSettings()
     assert second.model.position is None
-    assert list(stored_settings(tmp_path)[DEST]) == [ACTION]
-    assert list(stored_state(tmp_path)[DEST]) == [ACTION]
+    assert list(stored_settings(tmp_path)) == [ACTION]
+    assert list(stored_state(tmp_path)) == [ACTION]
 
 
 async def test_settings_and_state_are_stored_in_their_own_file(
@@ -175,11 +185,9 @@ async def test_settings_and_state_are_stored_in_their_own_file(
     await action.sync()
 
     assert stored_settings(tmp_path) == {
-        DEST: {
-            ACTION: {"settings": {"travel_time_open": 40.0, "travel_time_close": 0.0}}
-        }
+        ACTION: {"settings": {"travel_time_open": 40.0, "travel_time_close": 0.0}}
     }
-    assert stored_state(tmp_path) == {DEST: {ACTION: {"position": 70}}}
+    assert stored_state(tmp_path) == {ACTION: {"position": 70}}
 
 
 async def test_state_change_does_not_write_the_settings(
@@ -195,7 +203,7 @@ async def test_state_change_does_not_write_the_settings(
     action.apply_measurement(0.0, 70, None)
     await action.sync()
 
-    assert writes == [STATE_FILE]
+    assert writes == [DEST_STATE]
 
 
 async def test_state_survives_restart(
@@ -258,7 +266,7 @@ async def test_state_is_written_only_on_change(
     await action.sync()
     await action.sync()
 
-    assert writes == [STATE_FILE]
+    assert writes == [DEST_STATE]
 
 
 async def test_destination_sync_writes_each_file_once(
@@ -276,25 +284,83 @@ async def test_destination_sync_writes_each_file_once(
     dest.actions[SECOND_ACTION_ID].apply_measurement(0.0, 20, None)
     await dest.sync()
 
-    assert writes == [STATE_FILE]
+    assert writes == [DEST_STATE]
     assert stored_state(tmp_path) == {
-        DEST: {ACTION: {"position": 10}, str(SECOND_ACTION_ID): {"position": 20}}
+        ACTION: {"position": 10},
+        str(SECOND_ACTION_ID): {"position": 20},
     }
 
 
-async def test_entries_of_other_destinations_are_kept(
+async def test_each_destination_has_its_own_files(
+    make_control: ControlFactory,
+    gateway: FakeGateway,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A change of one destination does not touch the files of another."""
+    gateway.config = {
+        **gateway.config,
+        "destinations": [
+            gateway.config["destinations"][0],
+            {**gateway.config["destinations"][0], "id": OTHER_DEST_ID},
+        ],
+    }
+    control = make_control(persist=str(tmp_path))
+    await control.refresh()
+    first = control.dests[DEST_ID].actions[ACTION_ID]
+    other = control.dests[OTHER_DEST_ID].actions[ACTION_ID]
+    await first.set_travel_time(TravelDirection.OPEN, 30)
+    writes = count_writes(monkeypatch)
+
+    await other.set_travel_time(TravelDirection.OPEN, 20)
+
+    assert writes == [f"{OTHER_DEST_ID}/{SETTINGS_FILE}"]
+    assert stored_settings(tmp_path)[ACTION]["settings"]["travel_time_open"] == 30.0
+    assert stored_settings(tmp_path, OTHER_DEST_ID) == {
+        ACTION: {"settings": {"travel_time_open": 20.0, "travel_time_close": 0.0}}
+    }
+
+
+async def test_files_of_an_unknown_destination_are_kept(
     make_control: ControlFactory, tmp_path: Path
 ) -> None:
-    """Data of a destination that the hub does not report stays in the file."""
-    other = {"3": {"settings": {"travel_time_open": 15.0, "travel_time_close": 16.0}}}
-    (tmp_path / SETTINGS_FILE).write_text(
-        json.dumps({"version": STORE_VERSION, "destinations": {"99": other}})
-    )
+    """Data of a destination that the hub does not report is not touched."""
+    unknown = dest_dir(tmp_path, OTHER_DEST_ID) / SETTINGS_FILE
+    unknown.parent.mkdir()
+    unknown.write_text("kept")
     action = await new_action(make_control, tmp_path)
 
     await action.set_travel_time(TravelDirection.OPEN, 30)
 
-    assert stored_settings(tmp_path)["99"] == other
+    assert unknown.read_text() == "kept"
+
+
+async def test_destination_added_later_reads_its_files(
+    make_control: ControlFactory, gateway: FakeGateway, tmp_path: Path
+) -> None:
+    """A destination that appears with a later refresh has its stored data."""
+    control = make_control(persist=str(tmp_path))
+    await control.refresh()
+    await (
+        control.dests[DEST_ID]
+        .actions[ACTION_ID]
+        .set_travel_time(TravelDirection.OPEN, 30)
+    )
+    other = dest_dir(tmp_path, OTHER_DEST_ID)
+    other.mkdir()
+    (other / SETTINGS_FILE).write_text((dest_dir(tmp_path) / SETTINGS_FILE).read_text())
+    gateway.config = {
+        **gateway.config,
+        "destinations": [
+            gateway.config["destinations"][0],
+            {**gateway.config["destinations"][0], "id": OTHER_DEST_ID},
+        ],
+    }
+
+    await control.refresh()
+
+    added = control.dests[OTHER_DEST_ID].actions[ACTION_ID]
+    assert added.settings.travel_time_open == 30.0
 
 
 async def test_overwrite_change_is_saved_with_settings(
@@ -308,16 +374,16 @@ async def test_overwrite_change_is_saved_with_settings(
     action["minValue"] = -75
     await action.sync()
 
-    assert stored_settings(tmp_path)[DEST][ACTION] == {
+    assert stored_settings(tmp_path)[ACTION] == {
         "overwrites": {"minValue": -75},
         "settings": {"travel_time_open": 30.0, "travel_time_close": 0.0},
     }
 
 
-async def test_removed_overwrite_is_removed_from_the_file(
+async def test_destination_without_data_has_no_file(
     make_control: ControlFactory, tmp_path: Path
 ) -> None:
-    """An action without data that differs from the defaults has no entry."""
+    """Removing the last entry removes the file and the empty directory."""
     action = await new_action(make_control, tmp_path)
     action._attrs["minValue"] = 0
     action["minValue"] = -75
@@ -326,7 +392,22 @@ async def test_removed_overwrite_is_removed_from_the_file(
     del action["minValue"]
     await action.sync()
 
-    assert stored_settings(tmp_path) == {}
+    assert is_empty(tmp_path)
+
+
+async def test_removed_settings_keep_the_state_file(
+    make_control: ControlFactory, tmp_path: Path
+) -> None:
+    """Only the file without entries is removed, the other one stays."""
+    action = await new_action(make_control, tmp_path)
+    await action.set_travel_time(TravelDirection.OPEN, 30)
+    action.apply_measurement(0.0, 70, None)
+    await action.sync()
+
+    await action.set_travel_time(TravelDirection.OPEN, 0)
+
+    assert not (dest_dir(tmp_path) / SETTINGS_FILE).exists()
+    assert stored_state(tmp_path) == {ACTION: {"position": 70}}
 
 
 async def test_concurrent_writes_keep_a_valid_file(
@@ -342,11 +423,11 @@ async def test_concurrent_writes_keep_a_valid_file(
         *(action.set_travel_time(TravelDirection.OPEN, i) for i in range(1, 41))
     )
 
-    stored = stored_settings(tmp_path)[DEST][ACTION]["settings"]
+    stored = stored_settings(tmp_path)[ACTION]["settings"]
     assert stored["travel_time_open"] == action.settings.travel_time_open == 40.0
-    assert not temporary_files(tmp_path)
+    assert not temporary_files(dest_dir(tmp_path))
     # The first change is written at once, all later ones with a second write.
-    assert writes == [SETTINGS_FILE, SETTINGS_FILE]
+    assert writes == [DEST_SETTINGS, DEST_SETTINGS]
 
 
 @pytest.mark.parametrize(
@@ -354,22 +435,20 @@ async def test_concurrent_writes_keep_a_valid_file(
     [
         "not json",
         "[]",
-        '{"version": 1, "destinations": []}',
-        '{"version": 1, "destinations": {"7": []}}',
-        '{"version": 1, "destinations": {"7": {"1": "x"}}}',
-        '{"version": 1, "destinations": {"7": {"1": {"settings": "x"}}}}',
-        '{"version": 1, "destinations": {"7": {"1": {"overwrites": "x"}}}}',
-        '{"version": 1, "destinations": {"7": {"1": '
-        '{"settings": {"travel_time_open": -5}}}}}',
-        '{"version": 2, "destinations": {"7": {"1": '
-        '{"settings": {"travel_time_open": 5}}}}}',
+        '{"version": 1, "actions": []}',
+        '{"version": 1, "actions": {"1": "x"}}',
+        '{"version": 1, "actions": {"1": {"settings": "x"}}}',
+        '{"version": 1, "actions": {"1": {"overwrites": "x"}}}',
+        '{"version": 1, "actions": {"1": {"settings": {"travel_time_open": -5}}}}',
+        '{"version": 2, "actions": {"1": {"settings": {"travel_time_open": 5}}}}',
     ],
 )
 async def test_unusable_file_falls_back_to_defaults(
     make_control: ControlFactory, tmp_path: Path, content: str
 ) -> None:
     """A broken or invalid file does not break the action."""
-    (tmp_path / SETTINGS_FILE).write_text(content)
+    dest_dir(tmp_path).mkdir()
+    (dest_dir(tmp_path) / SETTINGS_FILE).write_text(content)
 
     action = await new_action(make_control, tmp_path)
     await action.sync()
@@ -409,7 +488,8 @@ async def test_file_that_is_no_text_falls_back_to_defaults(
     make_control: ControlFactory, tmp_path: Path
 ) -> None:
     """A file with broken encoding is ignored like broken JSON."""
-    (tmp_path / SETTINGS_FILE).write_bytes(b"\xff\xfe\x00")
+    dest_dir(tmp_path).mkdir()
+    (dest_dir(tmp_path) / SETTINGS_FILE).write_bytes(b"\xff\xfe\x00")
 
     action = await new_action(make_control, tmp_path)
     await action.sync()
@@ -454,12 +534,12 @@ async def test_failed_write_is_tried_again_with_the_next_sync(
     monkeypatch.setattr(os, "replace", fail)
     await action.set_travel_time(TravelDirection.OPEN, 12.0)
     assert "Could not write" in caplog.text
-    assert is_empty(tmp_path)
+    assert is_empty(dest_dir(tmp_path))
 
     monkeypatch.setattr(os, "replace", replace)
     await action.sync()
 
-    stored = stored_settings(tmp_path)[DEST][ACTION]["settings"]
+    stored = stored_settings(tmp_path)[ACTION]["settings"]
     assert stored["travel_time_open"] == 12.0
 
 
@@ -489,5 +569,5 @@ async def test_change_during_a_write_is_stored_with_the_next_write(
     release.set()
     await asyncio.gather(first, second)
 
-    stored = stored_settings(tmp_path)[DEST][ACTION]["settings"]
+    stored = stored_settings(tmp_path)[ACTION]["settings"]
     assert stored["travel_time_open"] == 20.0

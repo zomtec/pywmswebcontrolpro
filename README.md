@@ -60,8 +60,13 @@ cannot encrypt or authenticate the connection. Run the gateway in a trusted netw
 
 ## Settings, movement model and stored state
 
-The client keeps the data of all actions of a hub in two files of the `persist`
-directory:
+The client keeps the data of the actions in the `persist` directory. Each destination
+has a directory of its own, named by its id, with two files:
+
+```
+<persist>/<destination id>/settings.json
+<persist>/<destination id>/state.json
+```
 
 - `settings.json`: what was set or learned and cannot be measured again. For a drive
   action (for example `AwningDrive`, `ValanceDrive` or `RollerShutterBlindDrive`) these
@@ -71,19 +76,23 @@ directory:
 - `state.json`: the last known position and tilt of a drive action and the target of a
   running drive.
 
-Both files have an entry for each destination and action, and only for data that
+Both files have an entry for each action of the destination, and only for data that
 differs from the defaults:
 
 ```json
-{"version": 1, "destinations": {"169520": {"0": {"settings": {"travel_time_open": 39.0, "travel_time_close": 39.0}}, "6": {"overwrites": {"minValue": -70}}}}}
+{"version": 1, "actions": {"0": {"settings": {"travel_time_open": 39.0, "travel_time_close": 39.0}}, "6": {"overwrites": {"minValue": -70}}}}
 ```
 
+A file without entries is removed, and with the last file the directory of the
+destination.
+
 The store of the client (`pywmswebcontrolpro/store.py`) is the only place that reads
-and writes the files. It reads them once with the first `WebControlPro.refresh()`, an
-action has its stored data from then on. Writes are serialized and replace a file
-atomically, changes that arrive during a write are stored together with the next one.
-A drive only writes `state.json`. Entries of destinations that the hub does not report
-are kept. Without a persist path nothing is stored.
+and writes the files. It reads the files of a destination once, when
+`WebControlPro.refresh()` creates it, an action has its stored data from then on.
+Writes are serialized and replace a file atomically, changes that arrive during a write
+are stored together with the next one. A drive only writes the `state.json` of its
+destination. Files of destinations that the hub does not report are not touched.
+Without a persist path nothing is stored.
 
 `Action.model` is the movement model of the cover driven by this action: `start_move`,
 `stop`, `set_tilt` and `apply_measurement` calculate the displayed position, which is
