@@ -144,6 +144,48 @@ async def test_stats_snapshot_is_detached(
     assert dest.stats.empty == 1
 
 
+def test_success_rate_is_unknown_without_a_refresh() -> None:
+    """Without a request there is no rate."""
+    assert RefreshStats().success_rate is None
+
+
+async def test_success_rate_is_the_share_of_refreshes_with_data(
+    dest: Destination, gateway: FakeGateway
+) -> None:
+    """Busy, empty and failed refreshes lower the rate."""
+    gateway.status_answers = [status_ok(), STATUS_BUSY, STATUS_EMPTY, TimeoutError()]
+    for _ in range(4):
+        await dest.refresh(retries=0)
+
+    assert dest.stats.success_rate == 25.0
+
+
+async def test_stats_of_the_client_combine_all_destinations(
+    make_control: Callable[..., WebControlPro], gateway: FakeGateway
+) -> None:
+    """The client sums the counters and knows the latest refresh with data."""
+    gateway.config = {
+        **gateway.config,
+        "destinations": [
+            gateway.config["destinations"][0],
+            {**gateway.config["destinations"][0], "id": 8},
+        ],
+    }
+    control = make_control()
+    await control.refresh()
+    assert control.stats.success_rate is None
+    assert control.stats.last_ok is None
+    gateway.status_answers = [status_ok(), STATUS_BUSY]
+
+    for dest in control.dests.values():
+        await dest.refresh(retries=0)
+
+    assert control.stats.ok == 1
+    assert control.stats.busy == 1
+    assert control.stats.success_rate == 50.0
+    assert control.stats.last_ok == control.dests[7].stats.last_ok
+
+
 async def test_diag_contains_stats(dest: Destination, gateway: FakeGateway) -> None:
     """Diagnostics include the counters."""
     gateway.status_answers = [status_ok()]

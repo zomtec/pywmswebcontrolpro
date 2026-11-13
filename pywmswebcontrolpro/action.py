@@ -1,6 +1,5 @@
 """An action of a destination with its stored settings and movement model."""
 
-import asyncio
 import math
 from dataclasses import asdict, replace
 from typing import TYPE_CHECKING, Any
@@ -10,20 +9,12 @@ from .const import (
     WMS_WebControl_pro_API_actionType,
     WMS_WebControl_pro_API_responseType,
 )
-from .store import (
-    STORE_VERSION,
-    ActionSettings,
-    JsonStore,
-    TravelDirection,
-    valid_percent,
-)
+from .store import ActionSettings, TravelDirection, valid_percent
 from .travel import CoverModel, Measurement, rotation_to_tilt, tilt_to_rotation
 
 if TYPE_CHECKING:
     from .destination import Destination
     from .webcontrol import WebControlPro
-
-_STORED_KEYS = frozenset({"version", "overwrites", "settings", "state"})
 
 # Firmware bug of the WMS WebControl pro: the hub reports the rotation limits
 # of slat drives as -127 and 127, the drives turn from -75 to 75. Warema knows
@@ -77,10 +68,8 @@ class Action:
     ) -> None:
         """Create the action from the configuration of the gateway."""
         self._dest = dest
-        # The id becomes part of a file path, so it must be a number.
         self._id = int(id)
-        self._persist = (dest._persist / f"{self._id}.json") if dest._persist else None
-        self._store = JsonStore(self._persist)
+        self._store = dest._control._store
         self._actionType = WMS_WebControl_pro_API_actionType(actionType)
         self._actionDescription = WMS_WebControl_pro_API_actionDescription(
             actionDescription
@@ -88,14 +77,14 @@ class Action:
         self._attrs = kwargs
         self._defaults = self._rotation_defaults()
         self._params: dict[str, Any] = {}
-        self._overwrites: dict[str, Any] = {}
-        self._needs_load = True
-        self._load_lock = asyncio.Lock()
-        self._needs_save = False
-        self._extra: dict[str, Any] = {}
-        self._settings = ActionSettings()
-        self._saved_state: dict[str, Any] | None = None
+        stored = self._store.settings(dest.id, self._id)
+        overwrites = stored.get("overwrites")
+        self._overwrites: dict[str, Any] = (
+            overwrites if isinstance(overwrites, dict) else {}
+        )
+        self._settings = ActionSettings.from_dict(stored.get("settings"))
         self.model = CoverModel()
+        self._restore_model(self._store.state(dest.id, self._id))
 
     def __str__(self) -> str:
         return self.actionDescription.name
@@ -168,56 +157,32 @@ class Action:
         minimum, maximum = self.rotation_range
         if rotation < minimum:
             self._overwrites[_MIN_VALUE] = rotation
-            self._needs_save = True
         elif rotation > maximum:
             self._overwrites[_MAX_VALUE] = rotation
-            self._needs_save = True
 
-    async def _load_persists(self) -> None:
-        data = await self._store.load()
-        self._extra = {k: v for k, v in data.items() if k not in _STORED_KEYS}
-        overwrites = data.get("overwrites")
-        if isinstance(overwrites, dict):
-            self._overwrites = overwrites
-        self._settings = ActionSettings.from_dict(data.get("settings"))
-        state = data.get("state")
-        if isinstance(state, dict):
-            position = valid_percent(state.get("position"))
-            tilt = valid_percent(state.get("tilt"))
-            target_tilt = valid_percent(state.get("target_tilt"))
-            self.model.restore(
-                position,
-                None if tilt is None else int(tilt),
-                valid_percent(state.get("target_position")),
-                None if target_tilt is None else int(target_tilt),
-            )
-        self._saved_state = self.model.snapshot()
-
-    async def _save_persists(self) -> None:
-        state = self.model.snapshot()
-        # Cleared before the write, so a change made during it is stored next.
-        self._needs_save = False
-        saved = await self._store.save(
-            {
-                **self._extra,
-                "version": STORE_VERSION,
-                "overwrites": self._overwrites,
-                "settings": asdict(self._settings),
-                "state": state,
-            }
+    def _restore_model(self, state: dict[str, Any]) -> None:
+        tilt = valid_percent(state.get("tilt"))
+        target_tilt = valid_percent(state.get("target_tilt"))
+        self.model.restore(
+            valid_percent(state.get("position")),
+            None if tilt is None else int(tilt),
+            valid_percent(state.get("target_position")),
+            None if target_tilt is None else int(target_tilt),
         )
-        if saved:
-            self._saved_state = state
-        else:
-            self._needs_save = True
 
-    async def _ensure_loaded(self) -> None:
-        # The lock makes a second caller wait for the stored data instead of
-        # working with the defaults and overwriting the file.
-        async with self._load_lock:
-            if self._needs_load:
-                await self._load_persists()
-                self._needs_load = False
+    def _publish(self) -> None:
+        """Hand the data that differs from the defaults to the store."""
+        settings: dict[str, Any] = {}
+        if self._overwrites:
+            settings["overwrites"] = self._overwrites
+        if self._settings != ActionSettings():
+            settings["settings"] = asdict(self._settings)
+        self._store.set_settings(self._dest.id, self._id, settings)
+        self._store.set_state(
+            self._dest.id,
+            self._id,
+            {k: v for k, v in self.model.snapshot().items() if v is not None},
+        )
 
     # --- Public methods ---
 
@@ -230,11 +195,10 @@ class Action:
         """Store the travel time of a full drive in seconds, 0 means unknown."""
         if not (math.isfinite(seconds) and seconds >= 0):
             raise ValueError(f"Travel time must be a number >= 0: {seconds}")
-        await self._ensure_loaded()
         self._settings = replace(
             self._settings, **{f"travel_time_{direction.value}": float(seconds)}
         )
-        await self._save_persists()
+        await self.sync()
 
     @property
     def reported_rotation_range(self) -> tuple[Any, Any]:
@@ -254,19 +218,17 @@ class Action:
         self, *, minimum: float | None = None, maximum: float | None = None
     ) -> None:
         """Overwrite one or both rotation limits and store them."""
-        await self._ensure_loaded()
         if minimum is not None:
             self._overwrites[_MIN_VALUE] = minimum
         if maximum is not None:
             self._overwrites[_MAX_VALUE] = maximum
-        await self._save_persists()
+        await self.sync()
 
     async def reset_rotation_range(self) -> None:
         """Remove the overwritten rotation limits and store that."""
-        await self._ensure_loaded()
         self._overwrites.pop(_MIN_VALUE, None)
         self._overwrites.pop(_MAX_VALUE, None)
-        await self._save_persists()
+        await self.sync()
 
     def rotation_to_tilt(self, rotation: float) -> int:
         """Convert a rotation to a tilt (0 closed, 100 open) with the limits in use."""
@@ -296,13 +258,12 @@ class Action:
         return self.model.apply_measurement(now, position, tilt)
 
     async def sync(self) -> None:
-        """Load stored data once and store changes of overwrites, settings and state.
+        """Store changes of overwrites, settings and state.
 
         Call this after commands and measurements. Destination.refresh does it too.
         """
-        await self._ensure_loaded()
-        if self._needs_save or self.model.snapshot() != self._saved_state:
-            await self._save_persists()
+        self._publish()
+        await self._store.flush()
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
@@ -323,14 +284,12 @@ class Action:
     def __setitem__(self, name: str, value: Any) -> None:
         if name in self._attrs:
             self._overwrites[name] = value
-            self._needs_save = True
         elif name in self._params:
             self._params[name] = value
 
     def __delitem__(self, name: str) -> None:
         if name in self._overwrites:
             del self._overwrites[name]
-            self._needs_save = True
 
     def prep(self, **kwargs: Any) -> ActionList:
         """Return an action list with this action and the given parameters."""

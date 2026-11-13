@@ -1,6 +1,8 @@
 """Mock gateway for tests: a fake aiohttp session that replays queued answers."""
 
+import json
 from collections.abc import Callable
+from pathlib import Path
 from types import TracebackType
 from typing import Any
 
@@ -12,6 +14,7 @@ from pywmswebcontrolpro.const import (
 )
 from pywmswebcontrolpro.destination import Destination
 from pywmswebcontrolpro.refresh import ERROR_RADIO_BUSY
+from pywmswebcontrolpro.store import SETTINGS_FILE, STATE_FILE
 from pywmswebcontrolpro.webcontrol import WebControlPro
 
 DEST_ID = 7
@@ -67,6 +70,16 @@ def status_ok(percentage: int = 40) -> dict[str, Any]:
 STATUS_BUSY = {"errors": [ERROR_RADIO_BUSY]}
 STATUS_EMPTY: dict[str, Any] = {}
 STATUS_NO_DETAILS = {"details": []}
+
+
+def stored_settings(persist: Path) -> Any:
+    """Return the settings in the file by destination and action."""
+    return json.loads((persist / SETTINGS_FILE).read_text())["destinations"]
+
+
+def stored_state(persist: Path) -> Any:
+    """Return the states in the file by destination and action."""
+    return json.loads((persist / STATE_FILE).read_text())["destinations"]
 
 
 class FakeResponse:

@@ -31,8 +31,10 @@ from .exceptions import (
     WebControlProConnectionError,
     WebControlProResponseError,
 )
+from .refresh import RefreshStats
 from .room import Room
 from .scene import Scene
+from .store import HubStore
 
 DEFAULT_STALE_WARNING_AFTER = timedelta(hours=24)
 DEFAULT_RETRY_DELAY = 1.0
@@ -70,10 +72,12 @@ class WebControlPro:
     ) -> None:
         """Create a client.
 
-        stale_warning_after sets how long a destination may
-        stay silent before a warning is logged, retry_delay the pause in
-        seconds between retries after a radio busy answer and request_spacing
-        the minimum pause in seconds between two status requests.
+        persist is the directory for the stored settings and the last state
+        of the actions, without it nothing is stored. stale_warning_after
+        sets how long a destination may stay silent before a warning is
+        logged, retry_delay the pause in seconds between retries after a
+        radio busy answer and request_spacing the minimum pause in seconds
+        between two status requests.
         """
         self.stale_warning_after = stale_warning_after
         self.retry_delay = retry_delay
@@ -84,7 +88,7 @@ class WebControlPro:
         self._host = host
         self._control = f"http://{host}/commonCommand"
         self._session = session
-        self._persist = Path(persist) if persist else None
+        self._store = HubStore(Path(persist) if persist else None)
         self._config: dict[str, Any] = {}
         self._dests: dict[int, Destination] = {}
         self._rooms: dict[int, Room] = {}
@@ -197,6 +201,8 @@ class WebControlPro:
         name. Rooms and scenes are created again.
         """
         config = await self._getConfiguration()
+        # New actions read their stored data when they are created.
+        await self._store.load()
         known = self._dests
         try:
             dests = {
@@ -261,6 +267,11 @@ class WebControlPro:
     def dests(self) -> Mapping[int, Destination]:
         """Return the destinations by id."""
         return MappingProxyType(self._dests)
+
+    @property
+    def stats(self) -> RefreshStats:
+        """Return the refresh counters of all destinations together."""
+        return RefreshStats.combined(dest.stats for dest in self._dests.values())
 
     @property
     def rooms(self) -> Mapping[int, Room]:

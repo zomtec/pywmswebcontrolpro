@@ -46,10 +46,8 @@ class Destination:
         **kwargs: Any,
     ) -> None:
         self._control = control
-        # The id becomes part of a file path, so it must be a number.
         self._id = int(id)
         self._names = names
-        self._persist = (control._persist / str(self._id)) if control._persist else None
         self._actions = {action["id"]: Action(self, **action) for action in actions}
         self._animationType = WMS_WebControl_pro_API_animationType(animationType)
         self._drivingCause = WMS_WebControl_pro_API_drivingCause.Unknown
@@ -135,9 +133,10 @@ class Destination:
     # --- Public methods ---
 
     async def sync(self) -> None:
-        """Load stored data once and store changes of all actions."""
+        """Store changes of all actions with one write for each file."""
         for action in self._actions.values():
-            await action.sync()
+            action._publish()
+        await self._control._store.flush()
 
     async def refresh(
         self, retries: int = DEFAULT_REFRESH_RETRIES, *, raise_on_error: bool = False

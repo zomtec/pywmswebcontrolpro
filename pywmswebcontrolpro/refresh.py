@@ -1,5 +1,6 @@
 """Result and statistics of status requests to a destination."""
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -78,6 +79,25 @@ class RefreshStats:
             self.stale_reported = True
             return StaleChange.STALE
         return None
+
+    @property
+    def success_rate(self) -> float | None:
+        """Return the share of refreshes with data in percent, None without one."""
+        total = self.ok + self.busy + self.empty + self.error
+        return 100 * self.ok / total if total else None
+
+    @classmethod
+    def combined(cls, stats: Iterable[RefreshStats]) -> RefreshStats:
+        """Return the sum of the counters and the latest refresh with data."""
+        total = cls()
+        for part in stats:
+            total.ok += part.ok
+            total.busy += part.busy
+            total.empty += part.empty
+            total.error += part.error
+            if part.last_ok and (total.last_ok is None or part.last_ok > total.last_ok):
+                total.last_ok = part.last_ok
+        return total
 
     def snapshot(self) -> RefreshStats:
         """Return a copy that does not change with later refreshes."""

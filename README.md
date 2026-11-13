@@ -29,9 +29,11 @@ failure the previous values stay unchanged. The outcome is truthy only for `ok`.
 to the hub (default 0.5 seconds).
 
 Failed refreshes are counted per destination (`Destination.stats`, also part of
-`diag()`) instead of being logged. A warning is logged once when a destination has
-failed continuously for `stale_warning_after` (default 24 hours) and once when it
-delivers data again.
+`diag()`) instead of being logged. `RefreshStats.success_rate` is the share of
+refreshes with data in percent, `RefreshStats.last_ok` the time of the last one, and
+`WebControlPro.stats` combines all destinations. A warning is logged once when a
+destination has failed continuously for `stale_warning_after` (default 24 hours) and
+once when it delivers data again.
 
 ## Errors
 
@@ -58,17 +60,30 @@ cannot encrypt or authenticate the connection. Run the gateway in a trusted netw
 
 ## Settings, movement model and stored state
 
-Each action keeps its data in `<persist>/<destination id>/<action id>.json`, the file
-that already holds the `overwrites` (for example the rotation limits). A drive action
-(for example `AwningDrive`, `ValanceDrive` or `RollerShutterBlindDrive`) stores in it:
+The client keeps the data of all actions of a hub in two files of the `persist`
+directory:
 
-- `settings`: the travel times for a full drive, open and close, in seconds
-  (`Action.set_travel_time`, 0 means unknown).
-- `state`: the last known position and tilt and the target of a running drive.
+- `settings.json`: what was set or learned and cannot be measured again. For a drive
+  action (for example `AwningDrive`, `ValanceDrive` or `RollerShutterBlindDrive`) these
+  are the travel times for a full drive, open and close, in seconds
+  (`Action.set_travel_time`, 0 means unknown), for a rotation action the `overwrites`
+  of the rotation limits.
+- `state.json`: the last known position and tilt of a drive action and the target of a
+  running drive.
 
-The file is written atomically and serialized against concurrent access, unknown keys
-and the `overwrites` of older versions are kept. Without a persist path nothing is
-stored.
+Both files have an entry for each destination and action, and only for data that
+differs from the defaults:
+
+```json
+{"version": 1, "destinations": {"169520": {"0": {"settings": {"travel_time_open": 39.0, "travel_time_close": 39.0}}, "6": {"overwrites": {"minValue": -70}}}}}
+```
+
+The store of the client (`pywmswebcontrolpro/store.py`) is the only place that reads
+and writes the files. It reads them once with the first `WebControlPro.refresh()`, an
+action has its stored data from then on. Writes are serialized and replace a file
+atomically, changes that arrive during a write are stored together with the next one.
+A drive only writes `state.json`. Entries of destinations that the hub does not report
+are kept. Without a persist path nothing is stored.
 
 `Action.model` is the movement model of the cover driven by this action: `start_move`,
 `stop`, `set_tilt` and `apply_measurement` calculate the displayed position, which is
@@ -92,7 +107,7 @@ The library works around it in `pywmswebcontrolpro/action.py`:
 - A rotation that is measured beyond the range in use widens it. The limits of the hub
   themselves (-127 and 127) are never learned.
 - `Action.set_rotation_range` overwrites the limits, `Action.reset_rotation_range`
-  returns to the default. Both are stored in the file of the action.
+  returns to the default. Both are stored in `settings.json`.
 - `Action.rotation_to_tilt` and `Action.tilt_to_rotation` convert with the limits in
   use. The minimum rotation is tilt 100, the maximum rotation is tilt 0, and the
   rotation that is sent is a whole number within the limits.
