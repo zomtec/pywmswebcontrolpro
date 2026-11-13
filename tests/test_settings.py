@@ -8,14 +8,30 @@ from pathlib import Path
 
 import pytest
 
+from pywmswebcontrolpro import store
 from pywmswebcontrolpro.action import Action
-from pywmswebcontrolpro.store import ActionSettings, TravelDirection
+from pywmswebcontrolpro.store import (
+    SETTINGS_FILE,
+    STATE_FILE,
+    STORE_VERSION,
+    ActionSettings,
+    TravelDirection,
+)
 from pywmswebcontrolpro.travel import PositionSource
 from pywmswebcontrolpro.webcontrol import WebControlPro
 
-from .conftest import ACTION_ID, DEST_ID, SECOND_ACTION_ID
+from .conftest import (
+    ACTION_ID,
+    DEST_ID,
+    SECOND_ACTION_ID,
+    stored_settings,
+    stored_state,
+)
 
 type ControlFactory = Callable[..., WebControlPro]
+
+DEST = str(DEST_ID)
+ACTION = str(ACTION_ID)
 
 
 async def new_action(
@@ -29,9 +45,11 @@ async def new_action(
     return control.dests[DEST_ID].actions[action_id]
 
 
-def action_file(persist: Path, action_id: int = ACTION_ID) -> Path:
-    """Return the file of an action."""
-    return persist / str(DEST_ID) / f"{action_id}.json"
+def write_file(persist: Path, name: str, entry: object) -> None:
+    """Write a stored file with one entry for the test action."""
+    (persist / name).write_text(
+        json.dumps({"version": STORE_VERSION, "destinations": {DEST: {ACTION: entry}}})
+    )
 
 
 def is_empty(path: Path) -> bool:
@@ -39,16 +57,34 @@ def is_empty(path: Path) -> bool:
     return not any(path.iterdir())
 
 
+def temporary_files(path: Path) -> list[Path]:
+    """Return the temporary files that a write left in the directory."""
+    return list(path.glob("*.tmp"))
+
+
+def count_writes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Return a list that collects the name of every file that is written."""
+    writes: list[str] = []
+    original = store._write
+
+    def counting_write(path: Path, content: str) -> None:
+        writes.append(path.name)
+        original(path, content)
+
+    monkeypatch.setattr(store, "_write", counting_write)
+    return writes
+
+
 async def test_defaults_without_file(
     make_control: ControlFactory, tmp_path: Path
 ) -> None:
-    """Without a stored file the travel times are 0 and nothing is written."""
+    """Without stored files the travel times are 0 and nothing is written."""
     action = await new_action(make_control, tmp_path)
 
     await action.sync()
 
     assert action.settings == ActionSettings()
-    assert not action_file(tmp_path).exists()
+    assert is_empty(tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -66,9 +102,21 @@ async def test_travel_time_survives_restart(
     await action.set_travel_time(direction, seconds)
 
     restarted = await new_action(make_control, tmp_path)
-    await restarted.sync()
 
     assert restarted.settings.travel_time(direction) == seconds
+
+
+async def test_stored_data_is_known_without_a_sync(
+    make_control: ControlFactory, tmp_path: Path
+) -> None:
+    """A new action has its stored data as soon as the client created it."""
+    write_file(tmp_path, SETTINGS_FILE, {"settings": {"travel_time_open": 20.0}})
+    write_file(tmp_path, STATE_FILE, {"position": 40})
+
+    action = await new_action(make_control, tmp_path)
+
+    assert action.settings == ActionSettings(20.0, 0.0)
+    assert action.model.position_int == 40
 
 
 async def test_set_travel_time_keeps_other_direction(
@@ -93,13 +141,13 @@ async def test_invalid_travel_time_is_rejected(
     with pytest.raises(ValueError, match="must be a number"):
         await action.set_travel_time(TravelDirection.OPEN, seconds)
 
-    assert not action_file(tmp_path).exists()
+    assert is_empty(tmp_path)
 
 
 async def test_drive_actions_are_independent(
     make_control: ControlFactory, tmp_path: Path
 ) -> None:
-    """Each drive action of a destination has its own times, model and file."""
+    """Each drive action of a destination has its own times, model and entry."""
     control = make_control(persist=str(tmp_path))
     await control.refresh()
     first, second = (
@@ -113,8 +161,41 @@ async def test_drive_actions_are_independent(
 
     assert second.settings == ActionSettings()
     assert second.model.position is None
-    assert action_file(tmp_path, ACTION_ID).exists()
-    assert not action_file(tmp_path, SECOND_ACTION_ID).exists()
+    assert list(stored_settings(tmp_path)[DEST]) == [ACTION]
+    assert list(stored_state(tmp_path)[DEST]) == [ACTION]
+
+
+async def test_settings_and_state_are_stored_in_their_own_file(
+    make_control: ControlFactory, tmp_path: Path
+) -> None:
+    """Each file holds only its kind of data and only what is known."""
+    action = await new_action(make_control, tmp_path)
+    await action.set_travel_time(TravelDirection.OPEN, 40)
+    action.apply_measurement(0.0, 70, None)
+    await action.sync()
+
+    assert stored_settings(tmp_path) == {
+        DEST: {
+            ACTION: {"settings": {"travel_time_open": 40.0, "travel_time_close": 0.0}}
+        }
+    }
+    assert stored_state(tmp_path) == {DEST: {ACTION: {"position": 70}}}
+
+
+async def test_state_change_does_not_write_the_settings(
+    make_control: ControlFactory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A drive only writes the file of the state."""
+    action = await new_action(make_control, tmp_path)
+    await action.set_travel_time(TravelDirection.OPEN, 40)
+    writes = count_writes(monkeypatch)
+
+    action.apply_measurement(0.0, 70, None)
+    await action.sync()
+
+    assert writes == [STATE_FILE]
 
 
 async def test_state_survives_restart(
@@ -122,12 +203,10 @@ async def test_state_survives_restart(
 ) -> None:
     """Position and tilt are restored after a restart and marked as restored."""
     action = await new_action(make_control, tmp_path)
-    await action.sync()
     action.apply_measurement(0.0, 35, 20)
     await action.sync()
 
     restarted = await new_action(make_control, tmp_path)
-    await restarted.sync()
 
     assert restarted.model.position_int == 35
     assert restarted.model.tilt == 20
@@ -145,7 +224,6 @@ async def test_running_drive_is_restored_at_its_target(
     await action.sync()
 
     restarted = await new_action(make_control, tmp_path)
-    await restarted.sync()
 
     assert restarted.model.position_int == 0
     assert restarted.model.tilt == 0
@@ -173,39 +251,50 @@ async def test_state_is_written_only_on_change(
 ) -> None:
     """Repeated syncs without a change do not rewrite the file."""
     action = await new_action(make_control, tmp_path)
-    saves = []
-    original = action._store.save
-
-    async def counting_save(data: dict) -> bool:
-        saves.append(data)
-        return await original(data)
-
-    monkeypatch.setattr(action._store, "save", counting_save)
+    writes = count_writes(monkeypatch)
 
     await action.sync()
     action.apply_measurement(0.0, 10, 10)
     await action.sync()
     await action.sync()
 
-    assert len(saves) == 1
+    assert writes == [STATE_FILE]
 
 
-async def test_existing_overwrites_and_unknown_keys_are_kept(
+async def test_destination_sync_writes_each_file_once(
+    make_control: ControlFactory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Changes of several actions of a destination are stored with one write."""
+    control = make_control(persist=str(tmp_path))
+    await control.refresh()
+    dest = control.dests[DEST_ID]
+    writes = count_writes(monkeypatch)
+
+    dest.actions[ACTION_ID].apply_measurement(0.0, 10, None)
+    dest.actions[SECOND_ACTION_ID].apply_measurement(0.0, 20, None)
+    await dest.sync()
+
+    assert writes == [STATE_FILE]
+    assert stored_state(tmp_path) == {
+        DEST: {ACTION: {"position": 10}, str(SECOND_ACTION_ID): {"position": 20}}
+    }
+
+
+async def test_entries_of_other_destinations_are_kept(
     make_control: ControlFactory, tmp_path: Path
 ) -> None:
-    """A file written by an older version keeps its content when settings change."""
-    path = action_file(tmp_path)
-    path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({"overwrites": {"minValue": -127}, "other": 1}))
+    """Data of a destination that the hub does not report stays in the file."""
+    other = {"3": {"settings": {"travel_time_open": 15.0, "travel_time_close": 16.0}}}
+    (tmp_path / SETTINGS_FILE).write_text(
+        json.dumps({"version": STORE_VERSION, "destinations": {"99": other}})
+    )
     action = await new_action(make_control, tmp_path)
 
     await action.set_travel_time(TravelDirection.OPEN, 30)
 
-    stored = json.loads(path.read_text())
-    assert stored["overwrites"] == {"minValue": -127}
-    assert stored["other"] == 1
-    assert stored["settings"]["travel_time_open"] == 30.0
-    assert action["minValue"] == -127
+    assert stored_settings(tmp_path)["99"] == other
 
 
 async def test_overwrite_change_is_saved_with_settings(
@@ -219,43 +308,74 @@ async def test_overwrite_change_is_saved_with_settings(
     action["minValue"] = -75
     await action.sync()
 
-    stored = json.loads(action_file(tmp_path).read_text())
-    assert stored["overwrites"] == {"minValue": -75}
-    assert stored["settings"]["travel_time_open"] == 30.0
+    assert stored_settings(tmp_path)[DEST][ACTION] == {
+        "overwrites": {"minValue": -75},
+        "settings": {"travel_time_open": 30.0, "travel_time_close": 0.0},
+    }
+
+
+async def test_removed_overwrite_is_removed_from_the_file(
+    make_control: ControlFactory, tmp_path: Path
+) -> None:
+    """An action without data that differs from the defaults has no entry."""
+    action = await new_action(make_control, tmp_path)
+    action._attrs["minValue"] = 0
+    action["minValue"] = -75
+    await action.sync()
+
+    del action["minValue"]
+    await action.sync()
+
+    assert stored_settings(tmp_path) == {}
 
 
 async def test_concurrent_writes_keep_a_valid_file(
-    make_control: ControlFactory, tmp_path: Path
+    make_control: ControlFactory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Many simultaneous writes end with the last value in a valid file."""
+    """Many simultaneous changes end with the last value in a valid file."""
     action = await new_action(make_control, tmp_path)
+    writes = count_writes(monkeypatch)
 
     await asyncio.gather(
         *(action.set_travel_time(TravelDirection.OPEN, i) for i in range(1, 41))
     )
 
-    path = action_file(tmp_path)
-    stored = json.loads(path.read_text())
-    assert stored["settings"]["travel_time_open"] == action.settings.travel_time_open
-    assert not list(path.parent.glob("*.tmp"))
+    stored = stored_settings(tmp_path)[DEST][ACTION]["settings"]
+    assert stored["travel_time_open"] == action.settings.travel_time_open == 40.0
+    assert not temporary_files(tmp_path)
+    # The first change is written at once, all later ones with a second write.
+    assert writes == [SETTINGS_FILE, SETTINGS_FILE]
 
 
 @pytest.mark.parametrize(
     "content",
-    ["not json", "[]", '{"settings": "x"}', '{"settings": {"travel_time_open": -5}}'],
+    [
+        "not json",
+        "[]",
+        '{"version": 1, "destinations": []}',
+        '{"version": 1, "destinations": {"7": []}}',
+        '{"version": 1, "destinations": {"7": {"1": "x"}}}',
+        '{"version": 1, "destinations": {"7": {"1": {"settings": "x"}}}}',
+        '{"version": 1, "destinations": {"7": {"1": {"overwrites": "x"}}}}',
+        '{"version": 1, "destinations": {"7": {"1": '
+        '{"settings": {"travel_time_open": -5}}}}}',
+        '{"version": 2, "destinations": {"7": {"1": '
+        '{"settings": {"travel_time_open": 5}}}}}',
+    ],
 )
 async def test_unusable_file_falls_back_to_defaults(
     make_control: ControlFactory, tmp_path: Path, content: str
 ) -> None:
     """A broken or invalid file does not break the action."""
-    path = action_file(tmp_path)
-    path.parent.mkdir(parents=True)
-    path.write_text(content)
+    (tmp_path / SETTINGS_FILE).write_text(content)
 
     action = await new_action(make_control, tmp_path)
     await action.sync()
 
     assert action.settings == ActionSettings()
+    assert action.rotation_range == (None, None)
 
 
 async def test_without_persist_path_nothing_is_stored(
@@ -285,41 +405,11 @@ async def test_diag_contains_settings_and_model(
     assert diag["model"]["source"] == "measured"
 
 
-async def test_first_load_and_a_change_at_the_same_time_keep_the_stored_data(
-    make_control: ControlFactory, tmp_path: Path
-) -> None:
-    """A change waits for the stored data instead of replacing it."""
-    path = action_file(tmp_path)
-    path.parent.mkdir(parents=True)
-    path.write_text(
-        json.dumps(
-            {
-                "overwrites": {"minValue": -75},
-                "settings": {"travel_time_open": 20.0, "travel_time_close": 21.0},
-                "state": {"position": 40},
-            }
-        )
-    )
-    action = await new_action(make_control, tmp_path)
-
-    await asyncio.gather(
-        action.sync(), action.set_travel_time(TravelDirection.OPEN, 33.0)
-    )
-
-    stored = json.loads(path.read_text())
-    assert stored["overwrites"] == {"minValue": -75}
-    assert stored["settings"] == {"travel_time_open": 33.0, "travel_time_close": 21.0}
-    assert stored["state"]["position"] == 40
-    assert action.settings == ActionSettings(33.0, 21.0)
-
-
 async def test_file_that_is_no_text_falls_back_to_defaults(
     make_control: ControlFactory, tmp_path: Path
 ) -> None:
     """A file with broken encoding is ignored like broken JSON."""
-    path = action_file(tmp_path)
-    path.parent.mkdir(parents=True)
-    path.write_bytes(b"\xff\xfe\x00")
+    (tmp_path / SETTINGS_FILE).write_bytes(b"\xff\xfe\x00")
 
     action = await new_action(make_control, tmp_path)
     await action.sync()
@@ -340,12 +430,9 @@ async def test_invalid_stored_state_is_ignored(
     make_control: ControlFactory, tmp_path: Path, state: dict[str, object]
 ) -> None:
     """A stored position that is no percentage is not restored."""
-    path = action_file(tmp_path)
-    path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({"state": state}))
+    write_file(tmp_path, STATE_FILE, state)
 
     action = await new_action(make_control, tmp_path)
-    await action.sync()
 
     assert action.model.position is None
     assert action.model.tilt is None
@@ -359,7 +446,6 @@ async def test_failed_write_is_tried_again_with_the_next_sync(
 ) -> None:
     """A write error is logged and the change is stored later."""
     action = await new_action(make_control, tmp_path)
-    await action.sync()
     replace = os.replace
 
     def fail(source: str, target: Path) -> None:
@@ -367,12 +453,41 @@ async def test_failed_write_is_tried_again_with_the_next_sync(
 
     monkeypatch.setattr(os, "replace", fail)
     await action.set_travel_time(TravelDirection.OPEN, 12.0)
-    assert not action_file(tmp_path).exists()
     assert "Could not write" in caplog.text
-    assert not list(action_file(tmp_path).parent.glob("*.tmp"))
+    assert is_empty(tmp_path)
 
     monkeypatch.setattr(os, "replace", replace)
     await action.sync()
 
-    stored = json.loads(action_file(tmp_path).read_text())
-    assert stored["settings"]["travel_time_open"] == 12.0
+    stored = stored_settings(tmp_path)[DEST][ACTION]["settings"]
+    assert stored["travel_time_open"] == 12.0
+
+
+async def test_change_during_a_write_is_stored_with_the_next_write(
+    make_control: ControlFactory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A change that arrives while a file is written is not lost."""
+    action = await new_action(make_control, tmp_path)
+    original = store._write
+    started = asyncio.Event()
+    release = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def slow_write(path: Path, content: str) -> None:
+        loop.call_soon_threadsafe(started.set)
+        asyncio.run_coroutine_threadsafe(release.wait(), loop).result()
+        original(path, content)
+
+    monkeypatch.setattr(store, "_write", slow_write)
+    first = asyncio.create_task(action.set_travel_time(TravelDirection.OPEN, 10))
+    await started.wait()
+    monkeypatch.setattr(store, "_write", original)
+    second = asyncio.create_task(action.set_travel_time(TravelDirection.OPEN, 20))
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(first, second)
+
+    stored = stored_settings(tmp_path)[DEST][ACTION]["settings"]
+    assert stored["travel_time_open"] == 20.0

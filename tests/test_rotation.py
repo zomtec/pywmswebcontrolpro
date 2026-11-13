@@ -1,6 +1,5 @@
 """Tests of the rotation limits and the conversion between rotation and tilt."""
 
-import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -15,7 +14,7 @@ from pywmswebcontrolpro.const import (
 from pywmswebcontrolpro.travel import rotation_to_tilt, tilt_to_rotation
 from pywmswebcontrolpro.webcontrol import WebControlPro
 
-from .conftest import FakeGateway
+from .conftest import FakeGateway, stored_settings
 
 type ControlFactory = Callable[..., WebControlPro]
 
@@ -198,15 +197,16 @@ async def test_rotation_range_can_be_set_and_reset(
 ) -> None:
     """The user can overwrite the limits, a reset returns to the default."""
     action = await rotate_action(make_control, gateway, slat_config(), tmp_path)
-    path = tmp_path / str(SLAT_DEST_ID) / f"{ROTATE_ID}.json"
 
     await action.set_rotation_range(minimum=-60)
     assert action.rotation_range == (-60, 75)
-    assert json.loads(path.read_text())["overwrites"] == {"minValue": -60}
+    assert stored_settings(tmp_path) == {
+        str(SLAT_DEST_ID): {str(ROTATE_ID): {"overwrites": {"minValue": -60}}}
+    }
 
     await action.set_rotation_range(maximum=70)
     assert action.rotation_range == (-60, 70)
 
     await action.reset_rotation_range()
     assert action.rotation_range == (-75, 75)
-    assert json.loads(path.read_text())["overwrites"] == {}
+    assert stored_settings(tmp_path) == {}

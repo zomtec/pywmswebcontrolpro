@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+Breaking changes:
+
+- The stored data of all actions of a hub is kept in two files of the persist
+  directory, `settings.json` (travel times and overwrites) and `state.json` (last known
+  position and tilt), instead of one file for each action
+  (`<destination id>/<action id>.json`). The old files are not read and not removed,
+  travel times and changed rotation limits have to be set again.
+- `JsonStore` is replaced by `HubStore`, the store of a client that reads the files
+  once and is the only place that writes them.
+
+Changed:
+
+- Only data that differs from the defaults is stored, an action without travel times,
+  overwrites or a known position has no entry.
+- A drive writes only `state.json`, the settings are written when they change.
+- Changes of several actions of a destination are stored with one write for each file.
+- An action has its stored data as soon as `WebControlPro.refresh()` created it, no
+  longer after the first `sync()`.
+
 ## 0.2.1
 
 Changed:
