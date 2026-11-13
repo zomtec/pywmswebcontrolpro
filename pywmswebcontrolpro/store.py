@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass, fields
 from enum import StrEnum
 from pathlib import Path
@@ -21,7 +22,7 @@ STORE_VERSION = 1
 SETTINGS_FILE = "settings.json"
 STATE_FILE = "state.json"
 
-type _Entries = dict[str, dict[str, dict[str, Any]]]
+type _Entries = dict[str, dict[str, Any]]
 
 
 class TravelDirection(StrEnum):
@@ -74,19 +75,14 @@ def _valid_entries(path: Path, data: Any) -> _Entries:
     if not isinstance(data, dict) or data.get("version") != STORE_VERSION:
         _LOGGER.warning("Ignoring file %s with an unknown format", path)
         return {}
-    destinations = data.get("destinations")
-    if not isinstance(destinations, dict):
+    actions = data.get("actions")
+    if not isinstance(actions, dict):
         return {}
-    entries = {
-        dest_id: {
-            action_id: entry
-            for action_id, entry in actions.items()
-            if isinstance(entry, dict) and entry
-        }
-        for dest_id, actions in destinations.items()
-        if isinstance(actions, dict)
+    return {
+        action_id: entry
+        for action_id, entry in actions.items()
+        if isinstance(entry, dict) and entry
     }
-    return {dest_id: actions for dest_id, actions in entries.items() if actions}
 
 
 async def _read(path: Path) -> _Entries:
@@ -121,6 +117,13 @@ def _write(path: Path, content: str) -> None:
         raise
 
 
+def _remove(path: Path) -> None:
+    path.unlink(missing_ok=True)
+    # The directory of a destination only exists while it has a file.
+    with contextlib.suppress(OSError):
+        path.parent.rmdir()
+
+
 class _Document:
     """Content of one file, an entry for each action that has data."""
 
@@ -129,76 +132,99 @@ class _Document:
         self.entries: _Entries = {}
         self.dirty = False
 
-    def get(self, dest_id: int, action_id: int) -> dict[str, Any]:
+    def get(self, action_id: int) -> dict[str, Any]:
         """Return a copy of the entry of an action, empty if there is none."""
-        entry = self.entries.get(str(dest_id), {}).get(str(action_id), {})
-        return copy.deepcopy(entry)
+        return copy.deepcopy(self.entries.get(str(action_id), {}))
 
-    def put(self, dest_id: int, action_id: int, entry: dict[str, Any]) -> None:
+    def put(self, action_id: int, entry: dict[str, Any]) -> None:
         """Take over the entry of an action, an empty entry removes it."""
-        if entry == self.get(dest_id, action_id):
+        if entry == self.get(action_id):
             return
         self.dirty = True
         if entry:
-            actions = self.entries.setdefault(str(dest_id), {})
-            actions[str(action_id)] = copy.deepcopy(entry)
-            return
-        actions = self.entries[str(dest_id)]
-        del actions[str(action_id)]
-        if not actions:
-            del self.entries[str(dest_id)]
+            self.entries[str(action_id)] = copy.deepcopy(entry)
+        else:
+            del self.entries[str(action_id)]
 
-    def dumps(self) -> str:
-        """Return the content of the file."""
-        return json.dumps({"version": STORE_VERSION, "destinations": self.entries})
+    def store(self) -> None:
+        """Write the file, a document without entries has no file."""
+        if self.path is None:
+            return
+        if not self.entries:
+            _remove(self.path)
+            return
+        content = json.dumps({"version": STORE_VERSION, "actions": self.entries})
+        _write(self.path, content)
+
+
+class _DestinationData:
+    """Both documents of one destination."""
+
+    def __init__(self, directory: Path | None) -> None:
+        self.settings = _Document(directory / SETTINGS_FILE if directory else None)
+        self.state = _Document(directory / STATE_FILE if directory else None)
+        self.loaded = False
+
+    @property
+    def documents(self) -> tuple[_Document, _Document]:
+        """Return the settings and the state."""
+        return (self.settings, self.state)
 
 
 class HubStore:
     """Stored data of all actions of one hub and the only place that writes it.
 
-    The settings, which change rarely and cannot be measured again, and the
-    last known state, which changes with every drive, are kept in two files of
-    the given directory. Both are read once. An action hands its data over and
-    reads what was stored, only data that differs from the defaults gets an
-    entry. Writes are serialized and replace a file atomically. A file that
-    cannot be read or written is logged and does not raise. Without a
-    directory nothing is stored.
+    Each destination has a directory of its own, named by its id, in the given
+    directory. The settings, which change rarely and cannot be measured again,
+    and the last known state, which changes with every drive, are kept in two
+    files of it. They are read once. An action hands its data over and reads
+    what was stored, only data that differs from the defaults gets an entry
+    and only a destination with entries has a file. Writes are serialized and
+    replace a file atomically. A file that cannot be read or written is logged
+    and does not raise. Without a directory nothing is stored.
     """
 
     def __init__(self, directory: Path | None) -> None:
-        """Create the store for the files in the given directory."""
-        self._settings = _Document(directory / SETTINGS_FILE if directory else None)
-        self._state = _Document(directory / STATE_FILE if directory else None)
+        """Create the store for the files below the given directory."""
+        self._directory = directory
+        self._destinations: dict[int, _DestinationData] = {}
         self._lock = asyncio.Lock()
-        self._loaded = False
 
-    async def load(self) -> None:
-        """Read both files once, further calls do nothing."""
+    def _destination(self, dest_id: int) -> _DestinationData:
+        if dest_id not in self._destinations:
+            directory = self._directory / str(dest_id) if self._directory else None
+            self._destinations[dest_id] = _DestinationData(directory)
+        return self._destinations[dest_id]
+
+    async def load(self, dest_ids: Iterable[int]) -> None:
+        """Read the files of the given destinations, those of each only once."""
         async with self._lock:
-            if self._loaded:
-                return
-            for document in (self._settings, self._state):
-                if document.path is not None:
-                    document.entries = await _read(document.path)
-            self._loaded = True
+            for dest_id in dest_ids:
+                destination = self._destination(dest_id)
+                if destination.loaded:
+                    continue
+                for document in destination.documents:
+                    if document.path is not None:
+                        document.entries = await _read(document.path)
+                destination.loaded = True
 
     def settings(self, dest_id: int, action_id: int) -> dict[str, Any]:
         """Return the stored settings of an action, empty if there are none."""
-        return self._settings.get(dest_id, action_id)
+        return self._destination(dest_id).settings.get(action_id)
 
     def state(self, dest_id: int, action_id: int) -> dict[str, Any]:
         """Return the stored state of an action, empty if there is none."""
-        return self._state.get(dest_id, action_id)
+        return self._destination(dest_id).state.get(action_id)
 
     def set_settings(
         self, dest_id: int, action_id: int, settings: dict[str, Any]
     ) -> None:
         """Take over the settings of an action for the next write."""
-        self._settings.put(dest_id, action_id, settings)
+        self._destination(dest_id).settings.put(action_id, settings)
 
     def set_state(self, dest_id: int, action_id: int, state: dict[str, Any]) -> None:
         """Take over the state of an action for the next write."""
-        self._state.put(dest_id, action_id, state)
+        self._destination(dest_id).state.put(action_id, state)
 
     async def flush(self) -> bool:
         """Write the files that have changes, return False if a write failed.
@@ -207,18 +233,17 @@ class HubStore:
         """
         written = True
         async with self._lock:
-            for document in (self._settings, self._state):
-                if not document.dirty:
-                    continue
-                # Cleared before the write, so a change made during it is
-                # written by the next call.
-                document.dirty = False
-                if document.path is None:
-                    continue
-                try:
-                    await asyncio.to_thread(_write, document.path, document.dumps())
-                except OSError as err:
-                    _LOGGER.warning("Could not write %s: %r", document.path, err)
-                    document.dirty = True
-                    written = False
+            for destination in list(self._destinations.values()):
+                for document in destination.documents:
+                    if not document.dirty:
+                        continue
+                    # Cleared before the write, so a change made during it is
+                    # written by the next call.
+                    document.dirty = False
+                    try:
+                        await asyncio.to_thread(document.store)
+                    except OSError as err:
+                        _LOGGER.warning("Could not write %s: %r", document.path, err)
+                        document.dirty = True
+                        written = False
         return written

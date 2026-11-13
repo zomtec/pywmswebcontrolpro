@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.0 (unreleased)
+
+Breaking changes:
+
+- The stored data is kept for each destination instead of for the whole hub:
+  `<destination id>/settings.json` and `<destination id>/state.json` in the persist
+  directory, with an entry for each action below `actions`. The files `settings.json`
+  and `state.json` of 0.3.0 in the persist directory itself are not read and not
+  removed, travel times and changed rotation limits have to be set again.
+
+Changed:
+
+- A change only writes the file of its destination.
+- A file without entries is removed, and with the last file the directory of the
+  destination.
+- The files of a destination are read when `WebControlPro.refresh()` creates it.
+
 ## 0.3.0
 
 Breaking changes:

@@ -200,8 +200,8 @@ async def test_rotation_range_can_be_set_and_reset(
 
     await action.set_rotation_range(minimum=-60)
     assert action.rotation_range == (-60, 75)
-    assert stored_settings(tmp_path) == {
-        str(SLAT_DEST_ID): {str(ROTATE_ID): {"overwrites": {"minValue": -60}}}
+    assert stored_settings(tmp_path, SLAT_DEST_ID) == {
+        str(ROTATE_ID): {"overwrites": {"minValue": -60}}
     }
 
     await action.set_rotation_range(maximum=70)
@@ -209,4 +209,4 @@ async def test_rotation_range_can_be_set_and_reset(
 
     await action.reset_rotation_range()
     assert action.rotation_range == (-75, 75)
-    assert stored_settings(tmp_path) == {}
+    assert not (tmp_path / str(SLAT_DEST_ID)).exists()
