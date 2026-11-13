@@ -12,6 +12,11 @@ Breaking changes:
 - `JsonStore` is replaced by `HubStore`, the store of a client that reads the files
   once and is the only place that writes them.
 
+Added:
+
+- `RefreshStats.success_rate`, the share of refreshes with data in percent, and
+  `WebControlPro.stats`, the counters of all destinations together.
+
 Changed:
 
 - Only data that differs from the defaults is stored, an action without travel times,

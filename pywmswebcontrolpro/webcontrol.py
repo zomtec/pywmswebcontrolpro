@@ -31,6 +31,7 @@ from .exceptions import (
     WebControlProConnectionError,
     WebControlProResponseError,
 )
+from .refresh import RefreshStats
 from .room import Room
 from .scene import Scene
 from .store import HubStore
@@ -266,6 +267,11 @@ class WebControlPro:
     def dests(self) -> Mapping[int, Destination]:
         """Return the destinations by id."""
         return MappingProxyType(self._dests)
+
+    @property
+    def stats(self) -> RefreshStats:
+        """Return the refresh counters of all destinations together."""
+        return RefreshStats.combined(dest.stats for dest in self._dests.values())
 
     @property
     def rooms(self) -> Mapping[int, Room]:

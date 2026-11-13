@@ -29,9 +29,11 @@ failure the previous values stay unchanged. The outcome is truthy only for `ok`.
 to the hub (default 0.5 seconds).
 
 Failed refreshes are counted per destination (`Destination.stats`, also part of
-`diag()`) instead of being logged. A warning is logged once when a destination has
-failed continuously for `stale_warning_after` (default 24 hours) and once when it
-delivers data again.
+`diag()`) instead of being logged. `RefreshStats.success_rate` is the share of
+refreshes with data in percent, `RefreshStats.last_ok` the time of the last one, and
+`WebControlPro.stats` combines all destinations. A warning is logged once when a
+destination has failed continuously for `stale_warning_after` (default 24 hours) and
+once when it delivers data again.
 
 ## Errors
 
