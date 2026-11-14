@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.0 (unreleased)
+
+Added:
+
+- `RefreshStats.last_duration`, the seconds the hub took to answer the last status
+  request of a destination.
+- `RefreshStats.recent_success_rate`, the share of refreshes with data within the last
+  `stats_window` (new argument of `WebControlPro`, default 24 hours).
+- `RefreshStats.causes` and the argument `cause` of `Destination.refresh()`: the
+  results are counted separately for regular requests and requests after a command.
+- The three values are part of `diag()`.
+
 ## 0.4.0
 
 Breaking changes:

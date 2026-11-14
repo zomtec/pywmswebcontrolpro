@@ -35,6 +35,19 @@ refreshes with data in percent, `RefreshStats.last_ok` the time of the last one,
 destination has failed continuously for `stale_warning_after` (default 24 hours) and
 once when it delivers data again.
 
+The statistics also tell:
+
+- `RefreshStats.last_duration`: the seconds the hub took to answer the last status
+  request, whatever the answer was. The pause before the request does not count. It is
+  `None` when the hub did not answer. The value belongs to one destination,
+  `WebControlPro.stats` does not have it.
+- `RefreshStats.recent_success_rate`: the share of refreshes with data within the last
+  `stats_window` (`WebControlPro(stats_window=...)`, default 24 hours), `None` without
+  a refresh in that time.
+- `RefreshStats.causes`: the results counted for each cause.
+  `Destination.refresh(cause=RefreshCause.SCHEDULED)` marks a regular request, the
+  default `RefreshCause.COMMAND` one that follows a command.
+
 ## Errors
 
 All errors of the library derive from `WebControlProError`

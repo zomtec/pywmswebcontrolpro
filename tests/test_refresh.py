@@ -1,5 +1,6 @@
 """Tests for the status refresh of a destination."""
 
+import time
 from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
@@ -10,6 +11,7 @@ import pytest
 from pywmswebcontrolpro.destination import Destination
 from pywmswebcontrolpro.exceptions import WebControlProConnectionError
 from pywmswebcontrolpro.refresh import (
+    RefreshCause,
     RefreshResult,
     RefreshStats,
     StaleChange,
@@ -281,3 +283,156 @@ async def test_request_spacing_delays_the_next_status_request(
 
     assert len(sleeps) == 1
     assert 0 < sleeps[0] <= 0.25
+
+
+@pytest.mark.parametrize(
+    ("answer", "answered"),
+    [
+        (status_ok(), True),
+        (STATUS_BUSY, True),
+        (STATUS_EMPTY, True),
+        (TimeoutError(), False),
+    ],
+)
+async def test_last_duration_is_the_answer_time_of_the_last_request(
+    dest: Destination,
+    gateway: FakeGateway,
+    answer: dict[str, Any] | Exception,
+    answered: bool,
+) -> None:
+    """Every answer of the hub has a duration, a request without answer has none."""
+    gateway.status_answers = [status_ok(), answer]
+    await dest.refresh()
+
+    await dest.refresh()
+
+    assert (dest.stats.last_duration is not None) is answered
+    assert dest.diag()["stats"]["last_duration"] == dest.stats.last_duration
+
+
+async def test_last_duration_excludes_the_request_spacing(
+    make_control: Callable[..., WebControlPro],
+    gateway: FakeGateway,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pause before a request does not count as answer time of the hub."""
+    control = make_control(request_spacing=60)
+    await control.refresh()
+    clock = [1000.0]
+
+    async def fake_sleep(delay: float) -> None:
+        clock[0] += delay
+
+    monkeypatch.setattr("pywmswebcontrolpro.webcontrol.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr(
+        "pywmswebcontrolpro.webcontrol.time.monotonic", lambda: clock[0]
+    )
+    gateway.status_answers = [status_ok(), status_ok()]
+    await control.dests[7].refresh()
+
+    await control.dests[7].refresh()
+
+    assert clock[0] == 1060.0
+    assert control.dests[7].stats.last_duration == 0.0
+
+
+async def test_results_are_counted_for_each_cause(
+    dest: Destination, gateway: FakeGateway
+) -> None:
+    """Regular requests and requests after a command have their own counters."""
+    gateway.status_answers = [status_ok(), STATUS_BUSY, STATUS_BUSY]
+
+    await dest.refresh(cause=RefreshCause.SCHEDULED)
+    await dest.refresh(cause=RefreshCause.SCHEDULED)
+    await dest.refresh()
+
+    assert dest.stats.causes == {
+        RefreshCause.SCHEDULED: {RefreshResult.OK: 1, RefreshResult.BUSY: 1},
+        RefreshCause.COMMAND: {RefreshResult.BUSY: 1},
+    }
+    assert dest.stats.busy == 2
+    assert dest.diag()["stats"]["causes"] == {
+        "scheduled": {"ok": 1, "busy": 1},
+        "command": {"busy": 1},
+    }
+
+
+def test_recent_success_rate_is_unknown_without_a_refresh() -> None:
+    """Without a request in the window there is no recent rate."""
+    assert RefreshStats().recent_success_rate is None
+
+
+def test_recent_success_rate_forgets_results_older_than_the_window() -> None:
+    """Only the refreshes of the last window seconds count."""
+    stats = RefreshStats(window=100.0)
+    now = time.monotonic()
+
+    stats.record(RefreshResult.BUSY, now=now - 150, stale_after=1e9)
+    stats.record(RefreshResult.BUSY, now=now - 50, stale_after=1e9)
+    stats.record(RefreshResult.OK, now=now, stale_after=1e9)
+
+    assert stats.recent_success_rate == 50.0
+    assert stats.success_rate == pytest.approx(100 / 3)
+    assert len(stats.recent) == 2
+
+
+def test_recent_success_rate_ends_when_the_last_refresh_is_too_old() -> None:
+    """A destination that was not asked within the window has no recent rate."""
+    stats = RefreshStats(window=100.0)
+
+    stats.record(RefreshResult.OK, now=time.monotonic() - 150, stale_after=1e9)
+
+    assert stats.recent_success_rate is None
+
+
+async def test_stats_window_of_the_client_is_used_by_its_destinations(
+    make_control: Callable[..., WebControlPro],
+) -> None:
+    """The window of the recent rate is set when the client is created."""
+    control = make_control(stats_window=timedelta(hours=1))
+    await control.refresh()
+
+    assert control.dests[7].stats.window == 3600.0
+    assert control.stats.window == 3600.0
+
+
+async def test_stats_of_the_client_combine_causes_and_recent_results(
+    make_control: Callable[..., WebControlPro], gateway: FakeGateway
+) -> None:
+    """The client sums the counters of the causes and the recent results."""
+    gateway.config = {
+        **gateway.config,
+        "destinations": [
+            gateway.config["destinations"][0],
+            {**gateway.config["destinations"][0], "id": 8},
+        ],
+    }
+    control = make_control()
+    await control.refresh()
+    assert control.stats.recent_success_rate is None
+    gateway.status_answers = [status_ok(), STATUS_BUSY, STATUS_BUSY, STATUS_BUSY]
+
+    for dest in control.dests.values():
+        await dest.refresh(cause=RefreshCause.SCHEDULED)
+        await dest.refresh(cause=RefreshCause.SCHEDULED)
+
+    assert control.stats.causes == {
+        RefreshCause.SCHEDULED: {RefreshResult.OK: 1, RefreshResult.BUSY: 3}
+    }
+    assert control.stats.recent_success_rate == 25.0
+    assert control.stats.last_duration is None
+
+
+async def test_stats_snapshot_keeps_its_causes_and_recent_results(
+    dest: Destination, gateway: FakeGateway
+) -> None:
+    """Later refreshes do not change the causes and recent results of a snapshot."""
+    gateway.status_answers = [status_ok(), STATUS_BUSY]
+    await dest.refresh()
+    snapshot = dest.stats
+
+    await dest.refresh()
+
+    assert snapshot.causes == {RefreshCause.COMMAND: {RefreshResult.OK: 1}}
+    assert snapshot.recent_success_rate == 100.0
+    assert dest.stats.recent_success_rate == 50.0
