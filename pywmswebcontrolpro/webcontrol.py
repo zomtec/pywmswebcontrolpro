@@ -31,7 +31,7 @@ from .exceptions import (
     WebControlProConnectionError,
     WebControlProResponseError,
 )
-from .refresh import RefreshStats
+from .refresh import DEFAULT_STATS_WINDOW, RefreshStats
 from .room import Room
 from .scene import Scene
 from .store import HubStore
@@ -69,6 +69,7 @@ class WebControlPro:
         stale_warning_after: timedelta = DEFAULT_STALE_WARNING_AFTER,
         retry_delay: float = DEFAULT_RETRY_DELAY,
         request_spacing: float = DEFAULT_REQUEST_SPACING,
+        stats_window: timedelta = timedelta(seconds=DEFAULT_STATS_WINDOW),
     ) -> None:
         """Create a client.
 
@@ -77,9 +78,11 @@ class WebControlPro:
         sets how long a destination may stay silent before a warning is
         logged, retry_delay the pause in seconds between retries after a
         radio busy answer and request_spacing the minimum pause in seconds
-        between two status requests.
+        between two status requests. stats_window is the time that the recent
+        success rate of the statistics looks back.
         """
         self.stale_warning_after = stale_warning_after
+        self.stats_window = stats_window
         self.retry_delay = retry_delay
         self._common_lock = asyncio.Lock()
         self._status_lock = asyncio.Lock()
@@ -138,18 +141,22 @@ class WebControlPro:
             WMS_WebControl_pro_API_command_getConfiguration
         )
 
-    async def _getStatus(self, destinationId: int) -> Any:
+    async def _getStatus(self, destinationId: int) -> tuple[Any, float]:
+        """Return the status answer and the seconds the hub took for it."""
         async with self._status_lock:
             elapsed_time = time.monotonic() - self._status_last
             if elapsed_time < self.request_spacing:
                 await asyncio.sleep(self.request_spacing - elapsed_time)
+            # The wait for the lock and the spacing is not part of the answer time.
+            started = time.monotonic()
             try:
-                return await self._commonCommand(
+                answer = await self._commonCommand(
                     WMS_WebControl_pro_API_command_getStatus,
                     destinations=[destinationId],
                 )
             finally:
                 self._status_last = time.monotonic()
+            return answer, self._status_last - started
 
     async def _action(
         self,

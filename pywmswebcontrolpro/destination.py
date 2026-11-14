@@ -17,6 +17,7 @@ from .const import (
 from .exceptions import WebControlProError
 from .refresh import (
     ERROR_RADIO_BUSY,
+    RefreshCause,
     RefreshOutcome,
     RefreshResult,
     RefreshStats,
@@ -55,7 +56,7 @@ class Destination:
         self._heartbeatError = None
         self._blocking = None
         self._status: dict[str, Any] = {}
-        self._stats = RefreshStats()
+        self._stats = RefreshStats(window=control.stats_window.total_seconds())
 
     def __str__(self) -> str:
         return self.name
@@ -139,7 +140,11 @@ class Destination:
         await self._control._store.flush()
 
     async def refresh(
-        self, retries: int = DEFAULT_REFRESH_RETRIES, *, raise_on_error: bool = False
+        self,
+        retries: int = DEFAULT_REFRESH_RETRIES,
+        *,
+        raise_on_error: bool = False,
+        cause: RefreshCause = RefreshCause.COMMAND,
     ) -> RefreshOutcome:
         """Request the status once and retry up to retries times if radio busy.
 
@@ -147,46 +152,49 @@ class Destination:
         previously known values stay unchanged. The outcome is counted in
         stats instead of being logged for every failure. With raise_on_error
         a WebControlProError of the request is raised instead of counted.
+        cause tells the statistics a regular request from one after a command.
         """
         await self.sync()
 
-        outcome = await self._request_status(retries, raise_on_error)
-        self._record(outcome.result)
-        return outcome
+        result, values, duration = await self._request_status(retries, raise_on_error)
+        self._record(result, cause, duration)
+        return RefreshOutcome(result, values)
 
     async def _request_status(
         self, retries: int, raise_on_error: bool
-    ) -> RefreshOutcome:
+    ) -> tuple[RefreshResult, dict[int, dict[str, Any]], float | None]:
+        """Return the result, the values and the answer time of the last request."""
         status: dict[str, Any] = {}
+        duration: float | None = None
         for attempt in range(retries + 1):
             try:
-                status = await self._control._getStatus(self._id)
+                status, duration = await self._control._getStatus(self._id)
             except WebControlProError:
                 if raise_on_error:
                     raise
-                return RefreshOutcome(RefreshResult.ERROR)
+                return RefreshResult.ERROR, {}, None
             if ERROR_RADIO_BUSY not in (status.get("errors") or ()):
                 break
             if attempt < retries:
                 await asyncio.sleep(self._control.retry_delay)
         else:
-            return RefreshOutcome(RefreshResult.BUSY)
+            return RefreshResult.BUSY, {}, duration
 
         if not status:
-            return RefreshOutcome(RefreshResult.EMPTY)
+            return RefreshResult.EMPTY, {}, duration
 
         try:
             values = self._apply_status(status)
         except (AttributeError, KeyError, TypeError) as err:
             _LOGGER.debug("Unexpected status for %s (%s): %r", self, self._id, err)
-            return RefreshOutcome(RefreshResult.ERROR)
+            return RefreshResult.ERROR, {}, duration
         if values is None:
             result = (
                 RefreshResult.ERROR if status.get("errors") else RefreshResult.EMPTY
             )
-            return RefreshOutcome(result)
+            return result, {}, duration
         self._status = status
-        return RefreshOutcome(RefreshResult.OK, values)
+        return RefreshResult.OK, values, duration
 
     def _apply_status(self, status: dict[str, Any]) -> dict[int, dict[str, Any]] | None:
         values: dict[int, dict[str, Any]] = {}
@@ -223,11 +231,15 @@ class Destination:
 
         return values if refreshed else None
 
-    def _record(self, result: RefreshResult) -> None:
+    def _record(
+        self, result: RefreshResult, cause: RefreshCause, duration: float | None
+    ) -> None:
         change = self._stats.record(
             result,
             now=time.monotonic(),
             stale_after=self._control.stale_warning_after.total_seconds(),
+            cause=cause,
+            duration=duration,
         )
         if change is StaleChange.STALE:
             _LOGGER.warning(
